@@ -1,85 +1,91 @@
 import { createClient } from '@supabase/supabase-js'
 
-// ============ CLAVES DEL NUEVO CLIENTE ============
-const supabaseUrl = 'https://lxdrvydupayligrkioke.supabase.co'
-const supabaseAnonKey = 'sb_publishable_53XxbYQFzoLL2mnM9SLqbg_cn874C1l'
+// ============ TUS CLAVES DE SUPABASE ============
+const supabaseUrl = 'https://bqrbwvgnctistwfpteiv.supabase.co'
+const supabaseAnonKey = 'sb_publishable_k8kK5o8fxNtV7-I5yKR92w_ty6EWHBW'
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // ============ FUNCIONES PARA GUARDAR Y CARGAR DATOS ============
+// IMPORTANTE: se sube todo en LOTE (1 sola llamada por tabla) en vez de
+// uno por uno. Esto evita que se corte a medias si cambias de pantalla,
+// se bloquea el celular, o el navegador pausa la pestana durante una
+// subida larga de muchos registros.
 
 export async function guardarDatos(data) {
   try {
-    // Guardar choferes
-    for (const driver of data.drivers) {
-      const { error } = await supabase
-        .from('drivers')
-        .upsert({ id: driver.id, name: driver.name, salary: driver.salary || 0 })
-      if (error) console.error('Error guardando driver:', error)
+    const errores = [];
+
+    // Choferes
+    if (data.drivers.length > 0) {
+      const payload = data.drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0 }));
+      const { error } = await supabase.from('drivers').upsert(payload);
+      if (error) errores.push({ tabla: 'drivers', error });
     }
 
-    // Guardar camiones
-    for (const truck of data.trucks) {
-      const { error } = await supabase
-        .from('trucks')
-        .upsert({ id: truck.id, name: truck.name, driver_id: truck.driverId })
-      if (error) console.error('Error guardando truck:', error)
+    // Camiones
+    if (data.trucks.length > 0) {
+      const payload = data.trucks.map(t => ({ id: t.id, name: t.name, driver_id: t.driverId }));
+      const { error } = await supabase.from('trucks').upsert(payload);
+      if (error) errores.push({ tabla: 'trucks', error });
     }
 
-    // Guardar cuentas
-    for (const account of data.accounts) {
-      const { error } = await supabase
-        .from('accounts')
-        .upsert({
-          id: account.id,
-          family_name: account.familyName,
-          kids: account.kids,
-          kids_active: account.kidsActive || {},
-          truck_id: account.truckId,
-          shift: account.shift,
-          category: account.category,
-          frequency: account.frequency,
-          rate: account.rate,
-          tipo_servicio: account.tipoServicio,
-          family_id: account.familyId || null,
-        })
-      if (error) console.error('Error guardando account:', error)
+    // Cuentas (sin campos de seguro, esa funcion ya no existe)
+    if (data.accounts.length > 0) {
+      const payload = data.accounts.map(account => ({
+        id: account.id,
+        family_name: account.familyName,
+        kids: account.kids,
+        kids_active: account.kidsActive || {},
+        truck_id: account.truckId,
+        shift: account.shift,
+        category: account.category,
+        frequency: account.frequency,
+        rate: account.rate,
+        tipo_servicio: account.tipoServicio,
+        family_id: account.familyId || null,
+      }));
+      const { error } = await supabase.from('accounts').upsert(payload);
+      if (error) errores.push({ tabla: 'accounts', error });
     }
 
-    // Guardar pagos
-    for (const payment of data.payments) {
-      const { error } = await supabase
-        .from('payments')
-        .upsert({
-          id: payment.id,
-          account_id: payment.accountId,
-          period: payment.period,
-          amount: payment.amount,
-          date: payment.date,
-        })
-      if (error) console.error('Error guardando payment:', error)
+    // Pagos
+    if (data.payments.length > 0) {
+      const payload = data.payments.map(payment => ({
+        id: payment.id,
+        account_id: payment.accountId,
+        period: payment.period,
+        amount: payment.amount,
+        date: payment.date,
+      }));
+      const { error } = await supabase.from('payments').upsert(payload);
+      if (error) errores.push({ tabla: 'payments', error });
     }
 
-    // Guardar gastos
-    for (const expense of data.expenses) {
-      const { error } = await supabase
-        .from('expenses')
-        .upsert({
-          id: expense.id,
-          truck_id: expense.truckId,
-          shift: expense.shift || 'GENERAL',
-          category: expense.category,
-          amount: expense.amount,
-          description: expense.desc || '',
-          date: expense.date,
-        })
-      if (error) console.error('Error guardando expense:', error)
+    // Gastos
+    if (data.expenses.length > 0) {
+      const payload = data.expenses.map(expense => ({
+        id: expense.id,
+        truck_id: expense.truckId,
+        shift: expense.shift || 'GENERAL',
+        category: expense.category,
+        amount: expense.amount,
+        description: expense.desc || '',
+        date: expense.date,
+      }));
+      const { error } = await supabase.from('expenses').upsert(payload);
+      if (error) errores.push({ tabla: 'expenses', error });
     }
 
-    return { success: true }
+    if (errores.length > 0) {
+      errores.forEach(e => console.error(`Error guardando ${e.tabla}:`, e.error));
+      return { success: false, errores };
+    }
+
+    return { success: true };
   } catch (error) {
-    console.error('Error guardando datos:', error)
-    return { success: false, error }
+    console.error('Error guardando datos:', error);
+    return { success: false, error };
   }
 }
 
@@ -105,6 +111,7 @@ export async function cargarDatos() {
     const { data: expenses, error: errExpenses } = await supabase.from('expenses').select('*')
     if (errExpenses) throw errExpenses
 
+    // Convertir a formato app.js
     return {
       drivers: drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0 })),
       trucks: trucks.map(t => ({ id: t.id, name: t.name, driverId: t.driver_id })),
