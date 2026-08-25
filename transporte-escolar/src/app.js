@@ -3,7 +3,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
 } from "recharts";
-import { Bus, Fuel, Wrench, Shield, Users, Plus, TrendingUp, TrendingDown, Wallet, Sun, Moon, X, Check, Pencil, Trash2, UserCircle, Banknote, Calendar, Home, ClipboardList, Truck, LayoutDashboard, Settings, DollarSign, School, User, Clock, Search, UserX } from "lucide-react";
+import { Bus, Fuel, Wrench, Shield, Users, Plus, TrendingUp, TrendingDown, Wallet, Sun, Moon, X, Check, Pencil, Trash2, UserCircle, Banknote, Calendar, Home, ClipboardList, Truck, LayoutDashboard, Settings, DollarSign, School, User, Clock, Search, UserX, Cloud, CloudOff } from "lucide-react";
+import { supabase, cargarDatos, guardarDatos } from './supabase';
 
 // ============ CONFIGURACIÓN DE ALMACENAMIENTO ============
 window.storage = {
@@ -96,7 +97,7 @@ function currentPeriod(account) {
   return account.frequency === "mensual" ? getMonthStart(new Date()) : getWeekStart(new Date());
 }
 
-// DATOS VACÍOS - Sin datos de ejemplo
+// DATOS VACÍOS
 function emptyData() {
   return {
     trucks: [],
@@ -126,38 +127,54 @@ function familyLabelFromKids(kids) {
   return `Hermanos ${apellido}`;
 }
 
+// ============ FUNCIONES DE CARGA Y PERSISTENCIA CON SUPABASE + LOCALSTORAGE ============
+
 async function loadData() {
+  // 1. Intentar cargar desde Supabase primero (nube)
+  try {
+    const data = await cargarDatos();
+    if (data && data.trucks && data.trucks.length > 0) {
+      // Guardar en localStorage como respaldo
+      await window.storage.set("transescolar-data-v3", JSON.stringify(data), false);
+      return data;
+    }
+  } catch (e) {
+    console.log("Error cargando desde Supabase, usando localStorage:", e);
+  }
+
+  // 2. Si no hay datos en la nube, intentar con localStorage
   try {
     const res = await window.storage.get("transescolar-data-v3", false);
     if (res && res.value) {
       const parsed = JSON.parse(res.value);
       if (isValidShape(parsed)) {
-        let migrated = false;
-        const accounts = parsed.accounts.map(a => {
-          const correcto = familyLabelFromKids(a.kids);
-          if (correcto && a.familyName !== correcto) {
-            migrated = true;
-            return { ...a, familyName: correcto };
-          }
-          return a;
-        });
-        if (migrated) {
-          const next = { ...parsed, accounts };
-          try { await window.storage.set("transescolar-data-v3", JSON.stringify(next), false); } catch (e) {}
-          return next;
-        }
+        // Subir a Supabase para sincronizar
+        await guardarDatos(parsed);
         return parsed;
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.log("Error cargando desde localStorage:", e);
+  }
+
+  // 3. Si no hay datos en ningún lado, empezar vacío
   const empty = emptyData();
-  try { await window.storage.set("transescolar-data-v3", JSON.stringify(empty), false); } catch (e) {}
+  await window.storage.set("transescolar-data-v3", JSON.stringify(empty), false);
+  await guardarDatos(empty);
   return empty;
 }
 
 async function persist(data) {
+  // Guardar en localStorage (respaldo local)
   try { await window.storage.set("transescolar-data-v3", JSON.stringify(data), false); } catch (e) {}
+  
+  // Guardar en Supabase (nube)
+  try { await guardarDatos(data); } catch (e) {
+    console.log("Error guardando en Supabase:", e);
+  }
 }
+
+// ============ FIN FUNCIONES DE CARGA ============
 
 function StatCard({ label, value, tone, Icon }) {
   const bg = tone === "green" ? GREEN_LT : tone === "brick" ? BRICK_LT : tone === "blue" ? BLUE_LT : tone === "orange" ? ORANGE_LT : CHIP_BG;
@@ -343,6 +360,7 @@ export default function App() {
   const [mainView, setMainView] = useState("clientes");
   const [view, setView] = useState("general");
   const [modal, setModal] = useState(null);
+  const [syncStatus, setSyncStatus] = useState({ synced: true, message: "Sincronizado" });
   
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
@@ -413,6 +431,23 @@ export default function App() {
       setAdminPassword("");
     }
   }
+
+  // ============ FUNCIÓN PARA SINCRONIZAR MANUALMENTE ============
+  async function syncToCloud() {
+    setSyncStatus({ synced: false, message: "Sincronizando..." });
+    try {
+      await guardarDatos(data);
+      setSyncStatus({ synced: true, message: "✅ Sincronizado con la nube" });
+      setTimeout(() => {
+        setSyncStatus({ synced: true, message: "Sincronizado" });
+      }, 3000);
+    } catch (error) {
+      setSyncStatus({ synced: false, message: "❌ Error al sincronizar" });
+      console.error("Error sincronizando:", error);
+    }
+  }
+
+  // ============ FUNCIONES CRUD ============
 
   function addTruck(form) {
     const next = { ...data, trucks: [...data.trucks, { id: uid(), ...form }] };
@@ -524,6 +559,24 @@ export default function App() {
           <div>
             <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Galindo</div>
             <div style={{ fontSize: 13, color: GRAY_TXT }}>{data.trucks.length} camiones · {alumnosActivos} alumnos activos</div>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11, color: syncStatus.synced ? GREEN : BRICK }}>
+              {syncStatus.message}
+            </span>
+            <button 
+              onClick={syncToCloud}
+              title="Sincronizar con la nube"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 4,
+                borderRadius: 4,
+              }}
+            >
+              <Cloud size={18} color={syncStatus.synced ? BLUE : BRICK} />
+            </button>
           </div>
         </div>
 
@@ -657,6 +710,24 @@ export default function App() {
                 💾 Descargar respaldo de datos
               </button>
               
+              <button
+                onClick={syncToCloud}
+                style={{
+                  padding: "10px 16px",
+                  borderRadius: 8,
+                  border: `1px solid ${GREEN}`,
+                  background: GREEN_LT,
+                  color: GREEN,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  textAlign: "left",
+                  fontFamily: "'Inter', sans-serif",
+                }}
+              >
+                ☁️ Sincronizar con la nube (Supabase)
+              </button>
+              
               <div>
                 <input
                   type="file"
@@ -667,10 +738,11 @@ export default function App() {
                     const file = e.target.files[0];
                     if (file) {
                       const reader = new FileReader();
-                      reader.onload = (event) => {
+                      reader.onload = async (event) => {
                         try {
                           const data = JSON.parse(event.target.result);
                           localStorage.setItem("transescolar-data-v3", JSON.stringify(data));
+                          await guardarDatos(data);
                           alert("✅ Respaldo cargado correctamente. La página se recargará.");
                           window.location.reload();
                         } catch (error) {
@@ -687,9 +759,9 @@ export default function App() {
                   style={{
                     padding: "10px 16px",
                     borderRadius: 8,
-                    border: `1px solid ${GREEN}`,
-                    background: GREEN_LT,
-                    color: GREEN,
+                    border: `1px solid ${ORANGE}`,
+                    background: ORANGE_LT,
+                    color: ORANGE,
                     cursor: "pointer",
                     fontSize: 13,
                     fontWeight: 600,
@@ -726,7 +798,7 @@ export default function App() {
                     });
                     
                     localStorage.setItem("transescolar-data-v3", JSON.stringify(data));
-                    alert("✅ Datos limpiados correctamente.\n\n• Piezas: 5 años conservados\n• Gasolina y otros: 2 años conservados\n• Pagos: 2 años conservados");
+                    alert("✅ Datos limpiados correctamente.");
                     window.location.reload();
                   }
                 }}
@@ -751,7 +823,7 @@ export default function App() {
                   if (window.confirm("⚠️ ¿ELIMINAR TODOS LOS DATOS?\n\nEsta acción NO se puede deshacer.\n\nAsegúrate de tener un respaldo antes de continuar.")) {
                     if (window.confirm("¿ESTÁS COMPLETAMENTE SEGURO?\n\nSe borrarán TODOS los datos.")) {
                       localStorage.removeItem("transescolar-data-v3");
-                      alert("✅ Todos los datos han sido eliminados. La página se recargará.");
+                      alert("✅ Todos los datos han sido eliminados.");
                       window.location.reload();
                     }
                   }
@@ -1333,7 +1405,7 @@ function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver 
   );
 }
 
-// ============ COMPONENTE CLIENTES CON FILTROS (MOSTRANDO ALUMNOS) ============
+// ============ COMPONENTE CLIENTES CON FILTROS ============
 
 function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoPayment }) {
   const [truckFilter, setTruckFilter] = useState("all");
@@ -1347,22 +1419,18 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
   
   let accounts = data.accounts;
 
-  // FILTRO POR CAMIÓN
   if (truckFilter !== "all" && truckFilter !== "deudores") {
     accounts = accounts.filter(a => a.truckId === truckFilter);
   }
 
-  // FILTRO POR TURNO
   if (turnoFilter !== "all") {
     accounts = accounts.filter(a => a.shift === turnoFilter);
   }
 
-  // FILTRO POR TIPO DE SERVICIO
   if (tipoFilter !== "all") {
     accounts = accounts.filter(a => a.tipoServicio === tipoFilter);
   }
 
-  // FILTRO POR DEUDORES
   if (truckFilter === "deudores") {
     const getWeeks = () => {
       const weeks = [];
@@ -1382,7 +1450,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     });
   }
 
-  // BÚSQUEDA POR TEXTO
   if (searchTerm.trim()) {
     const term = searchTerm.toLowerCase().trim();
     accounts = accounts.filter(a => {
@@ -1393,7 +1460,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     });
   }
 
-  // Guardar posición del scroll antes de abrir modal
   const handleEditAccount = (account) => {
     setSelectedAccountId(account.id);
     if (listRef.current) {
@@ -1402,7 +1468,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     onEditAccount(account);
   };
 
-  // Restaurar scroll al cerrar modal
   useEffect(() => {
     if (!selectedAccountId) {
       setTimeout(() => {
@@ -1455,7 +1520,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
 
   const deudores = data.accounts.filter(a => getPaymentCount(a.id) < 4).length;
 
-  // Función para contar ALUMNOS (no cuentas) por tipo de servicio
   const getAlumnosPorTipo = (tipoId) => {
     return data.accounts
       .filter(a => a.tipoServicio === tipoId)
@@ -1493,7 +1557,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     }
   };
 
-  // Obtener estadísticas de turnos en ALUMNOS
   const totalManana = data.accounts
     .filter(a => a.shift === "AM")
     .reduce((acc, a) => acc + a.kids.filter(name => !a.kidsActive || a.kidsActive[name] !== false).length, 0);
@@ -1501,7 +1564,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     .filter(a => a.shift === "PM")
     .reduce((acc, a) => acc + a.kids.filter(name => !a.kidsActive || a.kidsActive[name] !== false).length, 0);
 
-  // Total de alumnos activos
   const totalAlumnos = data.accounts.reduce((acc, a) => 
     acc + a.kids.filter(name => !a.kidsActive || a.kidsActive[name] !== false).length, 0);
 
@@ -1527,7 +1589,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
         />
       </div>
 
-      {/* FILTRO POR CAMIÓN */}
       <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 10, paddingBottom: 4, flexWrap: "wrap" }}>
         <button onClick={() => setTruckFilter("all")} style={chipBtn(truckFilter === "all")}>Todos</button>
         <button onClick={() => setTruckFilter("deudores")} style={chipBtn(truckFilter === "deudores")}>⚠️ Deudores</button>
@@ -1536,7 +1597,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
         ))}
       </div>
 
-      {/* FILTRO POR TURNO (en ALUMNOS) */}
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
         <button 
           onClick={() => setTurnoFilter("all")} 
@@ -1566,7 +1626,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
         </button>
       </div>
 
-      {/* FILTRO POR TIPO DE SERVICIO (en ALUMNOS) */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
         <button 
           onClick={() => setTipoFilter("all")} 
@@ -1628,7 +1687,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           const tipoLabel = getTipoLabel(a.tipoServicio);
           const isSelected = selectedAccountId === a.id;
           
-          // Icono según tipo de servicio
           const tipoIcon = a.tipoServicio === "kinder" ? "🧸" : 
                            a.tipoServicio === "escuela_dia" ? "☀️" :
                            a.tipoServicio === "escuela_tarde" ? "🌙" :
@@ -1681,7 +1739,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
                 </div>
               </div>
 
-              {/* 4 SEMANAS DE PAGO */}
               {weeks.map((week, wi) => {
                 const payment = data.payments.find(p => p.accountId === a.id && p.period === week);
                 const isPaid = !!payment;
@@ -2007,7 +2064,7 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
 
       <label style={labelStyle}>👨‍👩‍👧‍👦 Alumnos en esta cuenta</label>
       <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: -2, marginBottom: 8 }}>
-        Todos comparten el mismo camion, turno y cobro. Si uno deja el servicio, dalo de baja sin borrar su historial.
+        Todos comparten el mismo camion, turno y cobro.
       </div>
       {students.map((s, i) => (
         <div key={s.id} style={{
@@ -2080,7 +2137,7 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
       <label style={labelStyle}>💰 Tarifa ({frequency === "mensual" ? "por mes" : "por semana"})</label>
       <input style={inputStyle} type="number" value={rate} onChange={e => { setRate(e.target.value); setRateTouched(true); }} />
       <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: -6, marginBottom: 12 }}>
-        Sugerido para {totalActive} alumno(s) activo(s): ${suggestedRate(category, totalActive) || "—"}. Se paga junto, en un solo clic, para todos.
+        Sugerido para {totalActive} alumno(s) activo(s): ${suggestedRate(category, totalActive) || "—"}
       </div>
 
       <div style={{ background: BLUE_LT, borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
@@ -2094,7 +2151,7 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
           {account?.insurancePaid ? (
             <span style={{ color: GREEN }}>✓ Seguro pagado el {account.insuranceDate}</span>
           ) : (
-            <span>Pendiente de pago — se cobra una sola vez y cubre a todos los hermanos</span>
+            <span>Pendiente de pago</span>
           )}
         </div>
       </div>
@@ -2129,7 +2186,7 @@ function FamilyLinkBox({ account, allAccounts, onLinkFamily, onUnlinkFamily }) {
         🔗 Hermano(s) en otra ruta o turno
       </div>
       <div style={{ fontSize: 11, color: GRAY_TXT, marginBottom: 10 }}>
-        Solo si un hermano va en otro camion, turno o tipo de servicio (si va en la misma ruta, mejor agregalo arriba como "Agregar hermano").
+        Solo si un hermano va en otro camion, turno o tipo de servicio.
       </div>
 
       {siblings.length > 0 && (
