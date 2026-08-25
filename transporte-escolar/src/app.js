@@ -80,12 +80,25 @@ function suggestedRate(category, numKids) {
   return "";
 }
 
+// IMPORTANTE: nunca usar date.toISOString().slice(0,10) para "hoy" o para
+// calcular el lunes de la semana -> toISOString() convierte a hora UTC, y
+// Monterrey esta en UTC-6, asi que cualquier accion despues de las 6pm hora
+// local se guardaba con la fecha del dia siguiente (ej. un pago del martes
+// en la noche se guardaba como miercoles), desalineando el "lunes" de esa
+// semana y dejando el pago sin poder combinar con ningun casillero.
+function toLocalISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function getWeekStart(d) {
   const date = new Date(d);
   const day = date.getDay();
   const diff = (day === 0 ? -6 : 1) - day;
   date.setDate(date.getDate() + diff);
-  return date.toISOString().slice(0, 10);
+  return toLocalISODate(date);
 }
 
 function getMonthStart(d) {
@@ -532,7 +545,7 @@ export default function App() {
   }
 
   function markPaid(accountId, period, amount) {
-    const next = { ...data, payments: [...data.payments, { id: uid(), accountId, period, amount: amount, date: new Date().toISOString().slice(0, 10) }] };
+    const next = { ...data, payments: [...data.payments, { id: uid(), accountId, period, amount: amount, date: toLocalISODate(new Date()) }] };
     setData(next); persist(next);
   }
   function undoPayment(paymentId) {
@@ -702,7 +715,7 @@ export default function App() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
                   a.href = url;
-                  a.download = `respaldo-transporte-${new Date().toISOString().slice(0,10)}.json`;
+                  a.download = `respaldo-transporte-${toLocalISODate(new Date())}.json`;
                   a.click();
                   alert("✅ Respaldo descargado correctamente.");
                 }}
@@ -1272,7 +1285,7 @@ function ExpenseForm({ trucks, onSubmit }) {
   const [shift, setShift] = useState("AM");
   const [amount, setAmount] = useState("");
   const [desc, setDesc] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(toLocalISODate(new Date()));
   const [error, setError] = useState("");
 
   const catInfo = CATS.find(c => c.id === category);
