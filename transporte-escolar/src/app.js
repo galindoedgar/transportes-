@@ -557,7 +557,7 @@ export default function App() {
             <Bus size={20} color={YELLOW} />
           </div>
           <div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Galindo</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Escolar</div>
             <div style={{ fontSize: 13, color: GRAY_TXT }}>{data.trucks.length} camiones · {alumnosActivos} alumnos activos</div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
