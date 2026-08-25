@@ -129,11 +129,22 @@ function familyLabelFromKids(kids) {
 
 // ============ FUNCIONES DE CARGA Y PERSISTENCIA CON SUPABASE + LOCALSTORAGE ============
 
+// Cuentas viejas (creadas antes de agregar "tipo de servicio") pueden no traer
+// tipoServicio -> se quedaban fuera de los contadores de Kinder/Escuela dia/etc,
+// por eso esos totales no cuadraban contra Manana+Tarde. Se les da un default.
+function backfillAccounts(accounts) {
+  return (accounts || []).map(a => ({
+    ...a,
+    tipoServicio: a.tipoServicio || "escuela_dia",
+  }));
+}
+
 async function loadData() {
   // 1. Intentar cargar desde Supabase primero (nube)
   try {
     const data = await cargarDatos();
     if (data && data.trucks && data.trucks.length > 0) {
+      data.accounts = backfillAccounts(data.accounts);
       // Guardar en localStorage como respaldo
       await window.storage.set("transescolar-data-v3", JSON.stringify(data), false);
       return data;
@@ -148,6 +159,7 @@ async function loadData() {
     if (res && res.value) {
       const parsed = JSON.parse(res.value);
       if (isValidShape(parsed)) {
+        parsed.accounts = backfillAccounts(parsed.accounts);
         // Subir a Supabase para sincronizar
         await guardarDatos(parsed);
         return parsed;
@@ -557,7 +569,7 @@ export default function App() {
             <Bus size={20} color={YELLOW} />
           </div>
           <div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Escolar</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Galindo</div>
             <div style={{ fontSize: 13, color: GRAY_TXT }}>{data.trucks.length} camiones · {alumnosActivos} alumnos activos</div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -1394,6 +1406,11 @@ function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver 
                       Salario: {fmt(d.salary)}
                     </span>
                   )}
+                  {d.helpers && d.helpers.length > 0 && (
+                    <span style={{ marginLeft: 8, background: PURPLE + "22", color: PURPLE, padding: "1px 8px", borderRadius: 10, fontSize: 11 }}>
+                      👥 {d.helpers.length} ayudante{d.helpers.length > 1 ? "s" : ""}
+                    </span>
+                  )}
                 </div>
               </div>
               <Pencil size={14} color={GRAY_TXT} />
@@ -1489,7 +1506,8 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
       d.setDate(d.getDate() - i * 7);
       weeks.push(d.toISOString().slice(0, 10));
     }
-    return weeks;
+    // Semana 1 = la mas antigua, a la izquierda. Semana 4 = la actual, a la derecha.
+    return weeks.reverse();
   };
 
   const weeks = getWeeks();
@@ -1670,7 +1688,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <div>Cliente</div>
           {weeks.map((w, i) => (
             <div key={i} style={{ textAlign: "center", fontSize: 13 }}>
-              Semana {4 - i}
+              Semana {i + 1}
               <div style={{ fontSize: 11, fontWeight: 400 }}>{formatWeekLabel(w)}</div>
             </div>
           ))}
@@ -1911,14 +1929,35 @@ function TruckForm({ truck, drivers, onSubmit, onDelete }) {
 
 // ============ COMPONENTE DRIVER FORM ============
 
+const HELPER_FREQUENCIES = [
+  { id: "semanal", label: "Semanal" },
+  { id: "cada_3_semanas", label: "Cada 3 semanas" },
+];
+
 function DriverForm({ driver, onSubmit, onDelete }) {
   const [name, setName] = useState(driver?.name || "");
   const [salary, setSalary] = useState(driver?.salary || "");
+  const [helpers, setHelpers] = useState(
+    driver?.helpers?.length ? driver.helpers : []
+  );
   const [error, setError] = useState("");
+
+  function addHelper() {
+    setHelpers([...helpers, { id: uid(), name: "", salary: "", frequency: "semanal" }]);
+  }
+  function updateHelper(id, field, value) {
+    setHelpers(helpers.map(h => h.id === id ? { ...h, [field]: value } : h));
+  }
+  function removeHelper(id) {
+    setHelpers(helpers.filter(h => h.id !== id));
+  }
 
   function submit() {
     if (!name.trim()) { setError("Escribe el nombre del chofer."); return; }
-    onSubmit({ name: name.trim(), salary: salary ? Number(salary) : 0 });
+    const cleanHelpers = helpers
+      .filter(h => h.name.trim())
+      .map(h => ({ id: h.id, name: h.name.trim(), salary: h.salary ? Number(h.salary) : 0, frequency: h.frequency || "semanal" }));
+    onSubmit({ name: name.trim(), salary: salary ? Number(salary) : 0, helpers: cleanHelpers });
   }
 
   return (
@@ -1929,7 +1968,46 @@ function DriverForm({ driver, onSubmit, onDelete }) {
       <label style={labelStyle}>Salario (por semana)</label>
       <input style={inputStyle} type="number" placeholder="Ej. 1800" value={salary} onChange={e => setSalary(e.target.value)} />
       <div style={{ fontSize: 11, color: GRAY_TXT, marginBottom: 12 }}>Dejar en blanco o 0 si no aplica</div>
-      
+
+      <label style={labelStyle}>👥 Ayudantes</label>
+      <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: -2, marginBottom: 8 }}>
+        Cada ayudante puede tener su propia frecuencia de pago.
+      </div>
+      {helpers.map(h => (
+        <div key={h.id} style={{ background: CHIP_BG, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <input
+              style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+              placeholder="Nombre del ayudante"
+              value={h.name}
+              onChange={e => updateHelper(h.id, "name", e.target.value)}
+            />
+            <button onClick={() => removeHelper(h.id)} style={{ border: "none", background: BRICK_LT, color: BRICK, borderRadius: 8, width: 40, cursor: "pointer", flexShrink: 0 }}>
+              <X size={14} />
+            </button>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+              type="number"
+              placeholder="Sueldo"
+              value={h.salary}
+              onChange={e => updateHelper(h.id, "salary", e.target.value)}
+            />
+            <select
+              style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+              value={h.frequency}
+              onChange={e => updateHelper(h.id, "frequency", e.target.value)}
+            >
+              {HELPER_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+            </select>
+          </div>
+        </div>
+      ))}
+      <button onClick={addHelper} style={{ ...btnStyle, background: CHIP_BG, color: INK, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+        <Plus size={14} /> Agregar ayudante
+      </button>
+
       {error && <div style={{ color: BRICK, fontSize: 12, marginBottom: 10 }}>{error}</div>}
       <button style={{ ...btnStyle, background: GREEN, marginBottom: onDelete ? 8 : 0 }} onClick={submit}>Guardar chofer</button>
       {onDelete && (

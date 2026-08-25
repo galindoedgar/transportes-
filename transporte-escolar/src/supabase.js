@@ -12,26 +12,53 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 // se bloquea el celular, o el navegador pausa la pestana durante una
 // subida larga de muchos registros.
 
+// Borra en Supabase cualquier fila de `tabla` cuyo id ya NO exista en `idsActuales`.
+// Esto es lo que faltaba: antes solo se hacia upsert() de lo que quedaba localmente,
+// pero nunca se le decia a Supabase "borra lo que ya no esta" -> por eso lo eliminado
+// (o editado, si el id no tenia PK/unique) regresaba al refrescar.
+async function borrarNoPresentes(tabla, idsActuales) {
+  // Si la tabla quedo completamente vacia localmente, borramos todo lo que haya en Supabase.
+  if (idsActuales.length === 0) {
+    const { error } = await supabase.from(tabla).delete().not('id', 'is', null);
+    return error;
+  }
+  const { error } = await supabase.from(tabla).delete().not('id', 'in', `(${idsActuales.map(id => `"${id}"`).join(',')})`);
+  return error;
+}
+
 export async function guardarDatos(data) {
   try {
     const errores = [];
 
-    // Choferes
-    if (data.drivers.length > 0) {
-      const payload = data.drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0 }));
-      const { error } = await supabase.from('drivers').upsert(payload);
-      if (error) errores.push({ tabla: 'drivers', error });
+    // Choferes (incluye ayudantes/helpers como jsonb)
+    {
+      const payload = data.drivers.map(d => ({
+        id: d.id,
+        name: d.name,
+        salary: d.salary || 0,
+        helpers: d.helpers || [],
+      }));
+      if (payload.length > 0) {
+        const { error } = await supabase.from('drivers').upsert(payload, { onConflict: 'id' });
+        if (error) errores.push({ tabla: 'drivers', error });
+      }
+      const errDel = await borrarNoPresentes('drivers', data.drivers.map(d => d.id));
+      if (errDel) errores.push({ tabla: 'drivers (borrar)', error: errDel });
     }
 
     // Camiones
-    if (data.trucks.length > 0) {
+    {
       const payload = data.trucks.map(t => ({ id: t.id, name: t.name, driver_id: t.driverId }));
-      const { error } = await supabase.from('trucks').upsert(payload);
-      if (error) errores.push({ tabla: 'trucks', error });
+      if (payload.length > 0) {
+        const { error } = await supabase.from('trucks').upsert(payload, { onConflict: 'id' });
+        if (error) errores.push({ tabla: 'trucks', error });
+      }
+      const errDel = await borrarNoPresentes('trucks', data.trucks.map(t => t.id));
+      if (errDel) errores.push({ tabla: 'trucks (borrar)', error: errDel });
     }
 
     // Cuentas (sin campos de seguro, esa funcion ya no existe)
-    if (data.accounts.length > 0) {
+    {
       const payload = data.accounts.map(account => ({
         id: account.id,
         family_name: account.familyName,
@@ -45,12 +72,16 @@ export async function guardarDatos(data) {
         tipo_servicio: account.tipoServicio,
         family_id: account.familyId || null,
       }));
-      const { error } = await supabase.from('accounts').upsert(payload);
-      if (error) errores.push({ tabla: 'accounts', error });
+      if (payload.length > 0) {
+        const { error } = await supabase.from('accounts').upsert(payload, { onConflict: 'id' });
+        if (error) errores.push({ tabla: 'accounts', error });
+      }
+      const errDel = await borrarNoPresentes('accounts', data.accounts.map(a => a.id));
+      if (errDel) errores.push({ tabla: 'accounts (borrar)', error: errDel });
     }
 
     // Pagos
-    if (data.payments.length > 0) {
+    {
       const payload = data.payments.map(payment => ({
         id: payment.id,
         account_id: payment.accountId,
@@ -58,12 +89,16 @@ export async function guardarDatos(data) {
         amount: payment.amount,
         date: payment.date,
       }));
-      const { error } = await supabase.from('payments').upsert(payload);
-      if (error) errores.push({ tabla: 'payments', error });
+      if (payload.length > 0) {
+        const { error } = await supabase.from('payments').upsert(payload, { onConflict: 'id' });
+        if (error) errores.push({ tabla: 'payments', error });
+      }
+      const errDel = await borrarNoPresentes('payments', data.payments.map(p => p.id));
+      if (errDel) errores.push({ tabla: 'payments (borrar)', error: errDel });
     }
 
     // Gastos
-    if (data.expenses.length > 0) {
+    {
       const payload = data.expenses.map(expense => ({
         id: expense.id,
         truck_id: expense.truckId,
@@ -73,8 +108,12 @@ export async function guardarDatos(data) {
         description: expense.desc || '',
         date: expense.date,
       }));
-      const { error } = await supabase.from('expenses').upsert(payload);
-      if (error) errores.push({ tabla: 'expenses', error });
+      if (payload.length > 0) {
+        const { error } = await supabase.from('expenses').upsert(payload, { onConflict: 'id' });
+        if (error) errores.push({ tabla: 'expenses', error });
+      }
+      const errDel = await borrarNoPresentes('expenses', data.expenses.map(e => e.id));
+      if (errDel) errores.push({ tabla: 'expenses (borrar)', error: errDel });
     }
 
     if (errores.length > 0) {
@@ -113,7 +152,7 @@ export async function cargarDatos() {
 
     // Convertir a formato app.js
     return {
-      drivers: drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0 })),
+      drivers: drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0, helpers: d.helpers || [] })),
       trucks: trucks.map(t => ({ id: t.id, name: t.name, driverId: t.driver_id })),
       accounts: accounts.map(a => ({
         id: a.id,
