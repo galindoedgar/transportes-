@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
 } from "recharts";
-import { Bus, Fuel, Wrench, Shield, Users, Plus, TrendingUp, TrendingDown, Wallet, Sun, Moon, X, Check, Pencil, Trash2, UserCircle, Banknote, Calendar, Home, ClipboardList, Truck, LayoutDashboard, Settings, DollarSign, School, User, Clock, Search, UserX, Cloud, CloudOff } from "lucide-react";
+import { Bus, Fuel, Wrench, Shield, Users, Plus, TrendingUp, TrendingDown, Wallet, Sun, Moon, X, Check, Pencil, Trash2, UserCircle, Banknote, Calendar, Home, ClipboardList, Truck, LayoutDashboard, Settings, DollarSign, School, User, Clock, Search, UserX, Cloud, CloudOff, Download } from "lucide-react";
 import { supabase, cargarDatos, guardarDatos } from './supabase';
 
 // ============ CONFIGURACIÓN DE ALMACENAMIENTO ============
@@ -93,6 +93,46 @@ function toLocalISODate(date) {
   return `${y}-${m}-${d}`;
 }
 
+// Reporte que piden las escuelas: Nombre, Tipo, Grado, Grupo, Maestro.
+// Cubre las 5 categorias (Kinder, Escuela Dia/Tarde, Secundaria Dia/Tarde).
+// Solo incluye alumnos activos (los dados de baja no van en el reporte).
+const TIPOS_REPORTE_ESCOLAR = TIPOS_SERVICIO.map(t => t.id);
+
+function accountsForReport(data) {
+  return data.accounts.filter(a => TIPOS_REPORTE_ESCOLAR.includes(a.tipoServicio));
+}
+
+function csvEscape(value) {
+  const str = String(value ?? "");
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function descargarReporteEscolar(accounts) {
+  const filas = [["Nombre", "Tipo", "Grado", "Grupo", "Maestro"]];
+  accounts.forEach(a => {
+    const tipoLabel = TIPOS_SERVICIO.find(t => t.id === a.tipoServicio)?.label || a.tipoServicio;
+    a.kids.forEach(name => {
+      const activo = !a.kidsActive || a.kidsActive[name] !== false;
+      if (!activo) return;
+      const info = a.kidsInfo?.[name] || {};
+      filas.push([name, tipoLabel, info.grado || "", info.grupo || "", info.maestro || ""]);
+    });
+  });
+  const csv = filas.map(fila => fila.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `reporte-grado-grupo-maestro-${toLocalISODate(new Date())}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function getWeekStart(d) {
   const date = new Date(d);
   const day = date.getDay();
@@ -152,14 +192,47 @@ function backfillAccounts(accounts) {
   }));
 }
 
+// Los ayudantes se guardaban anidados dentro de un chofer (driver.helpers).
+// Ahora son independientes: cada ayudante es su propia entrada en "drivers"
+// con role:"ayudante", sin depender de ningun chofer. Esto convierte una sola
+// vez los datos viejos a la nueva forma.
+function migrateDrivers(drivers) {
+  const list = drivers || [];
+  const nuevosAyudantes = [];
+  const choferes = list.map(d => {
+    if (d.helpers && d.helpers.length > 0) {
+      d.helpers.forEach(h => {
+        if (h.name && h.name.trim()) {
+          nuevosAyudantes.push({
+            id: h.id || uid(),
+            name: h.name.trim(),
+            salary: h.salary || 0,
+            role: "ayudante",
+            frequency: h.frequency || "semanal",
+          });
+        }
+      });
+    }
+    const { helpers, ...rest } = d;
+    return { ...rest, role: rest.role || "chofer", frequency: rest.frequency || "semanal" };
+  });
+  return [...choferes, ...nuevosAyudantes];
+}
+
 async function loadData() {
   // 1. Intentar cargar desde Supabase primero (nube)
   try {
     const data = await cargarDatos();
     if (data && data.trucks && data.trucks.length > 0) {
       data.accounts = backfillAccounts(data.accounts);
+      const antes = JSON.stringify(data.drivers);
+      data.drivers = migrateDrivers(data.drivers);
       // Guardar en localStorage como respaldo
       await window.storage.set("transescolar-data-v3", JSON.stringify(data), false);
+      // Si la migracion de ayudantes cambio algo, subirlo a Supabase de una vez
+      if (JSON.stringify(data.drivers) !== antes) {
+        await guardarDatos(data);
+      }
       return data;
     }
   } catch (e) {
@@ -173,6 +246,7 @@ async function loadData() {
       const parsed = JSON.parse(res.value);
       if (isValidShape(parsed)) {
         parsed.accounts = backfillAccounts(parsed.accounts);
+        parsed.drivers = migrateDrivers(parsed.drivers);
         // Subir a Supabase para sincronizar
         await guardarDatos(parsed);
         return parsed;
@@ -1002,8 +1076,10 @@ export default function App() {
           data={data}
           onAddTruck={() => setModal({ type: "truck" })}
           onEditTruck={truck => setModal({ type: "truck", truck })}
-          onAddDriver={() => setModal({ type: "driver" })}
+          onAddDriver={() => setModal({ type: "driver", role: "chofer" })}
           onEditDriver={driver => setModal({ type: "driver", driver })}
+          onAddAyudante={() => setModal({ type: "driver", role: "ayudante" })}
+          onEditAyudante={driver => setModal({ type: "driver", driver })}
         />
       )}
 
@@ -1107,9 +1183,10 @@ export default function App() {
         </Modal>
       )}
       {modal && modal.type === "driver" && (
-        <Modal title={modal.driver ? "Editar chofer" : "Nuevo chofer"} onClose={() => setModal(null)}>
+        <Modal title={modal.driver ? (modal.driver.role === "ayudante" ? "Editar ayudante" : "Editar chofer") : (modal.role === "ayudante" ? "Nuevo ayudante" : "Nuevo chofer")} onClose={() => setModal(null)}>
           <DriverForm
             driver={modal.driver}
+            initialRole={modal.role || "chofer"}
             onSubmit={form => modal.driver ? updateDriver(modal.driver.id, form) : addDriver(form)}
             onDelete={modal.driver ? () => deleteDriver(modal.driver.id) : null}
           />
@@ -1362,8 +1439,10 @@ function ExpenseForm({ trucks, onSubmit }) {
 
 // ============ COMPONENTE FLOTA ============
 
-function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver }) {
+function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver, onAddAyudante, onEditAyudante }) {
   const driverName = id => data.drivers.find(d => d.id === id)?.name || "Sin asignar";
+  const choferes = data.drivers.filter(d => d.role !== "ayudante");
+  const ayudantes = data.drivers.filter(d => d.role === "ayudante");
   
   return (
     <div>
@@ -1402,9 +1481,9 @@ function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver 
           <Plus size={13} /> Chofer
         </button>
       </div>
-      <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
-        {data.drivers.length === 0 && <div style={{ padding: 16, textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>Sin choferes registrados.</div>}
-        {data.drivers.map((d, i) => {
+      <div style={{ background: CARD, borderRadius: 14, overflow: "hidden", marginBottom: 20 }}>
+        {choferes.length === 0 && <div style={{ padding: 16, textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>Sin choferes registrados.</div>}
+        {choferes.map((d, i) => {
           const truck = data.trucks.find(t => t.driverId === d.id);
           return (
             <button key={d.id} onClick={() => onEditDriver(d)} style={{ width: "100%", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: i === 0 ? "none" : `1px solid ${BORDER}`, background: "none", border: "none", borderTopWidth: i === 0 ? 0 : 1, borderTopStyle: "solid", borderTopColor: BORDER, cursor: "pointer", fontFamily: "'Inter', sans-serif" }}>
@@ -1419,17 +1498,42 @@ function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver 
                       Salario: {fmt(d.salary)}
                     </span>
                   )}
-                  {d.helpers && d.helpers.length > 0 && (
-                    <span style={{ marginLeft: 8, background: PURPLE + "22", color: PURPLE, padding: "1px 8px", borderRadius: 10, fontSize: 11 }}>
-                      👥 {d.helpers.length} ayudante{d.helpers.length > 1 ? "s" : ""}
-                    </span>
-                  )}
                 </div>
               </div>
               <Pencil size={14} color={GRAY_TXT} />
             </button>
           );
         })}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>Ayudantes</div>
+        <button onClick={onAddAyudante} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: "none", background: INK, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+          <Plus size={13} /> Ayudante
+        </button>
+      </div>
+      <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
+        {ayudantes.length === 0 && <div style={{ padding: 16, textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>Sin ayudantes registrados.</div>}
+        {ayudantes.map((d, i) => (
+          <button key={d.id} onClick={() => onEditAyudante(d)} style={{ width: "100%", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: i === 0 ? "none" : `1px solid ${BORDER}`, background: "none", border: "none", borderTopWidth: i === 0 ? 0 : 1, borderTopStyle: "solid", borderTopColor: BORDER, cursor: "pointer", fontFamily: "'Inter', sans-serif" }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: INK, display: "flex", alignItems: "center", gap: 6 }}>
+                👥 {d.name}
+              </div>
+              <div style={{ fontSize: 12, color: GRAY_TXT, marginTop: 2 }}>
+                {d.salary && (
+                  <span style={{ background: GREEN_LT, color: GREEN, padding: "1px 8px", borderRadius: 10, fontSize: 11 }}>
+                    Salario: {fmt(d.salary)}
+                  </span>
+                )}
+                <span style={{ marginLeft: 8, background: PURPLE + "22", color: PURPLE, padding: "1px 8px", borderRadius: 10, fontSize: 11 }}>
+                  {d.frequency === "cada_3_semanas" ? "Cada 3 semanas" : "Semanal"}
+                </span>
+              </div>
+            </div>
+            <Pencil size={14} color={GRAY_TXT} />
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1526,10 +1630,23 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
   const weeks = getWeeks();
   
   const formatWeekLabel = (dateStr) => {
-    const d = new Date(dateStr + "T00:00:00");
-    const day = d.getDate();
-    const month = d.getMonth() + 1;
-    return `${day}/${month}`;
+    const lunes = new Date(dateStr + "T00:00:00");
+    const viernes = new Date(lunes);
+    viernes.setDate(viernes.getDate() + 4);
+
+    const dIni = lunes.getDate();
+    const mIni = lunes.getMonth() + 1;
+    const dFin = viernes.getDate();
+    const mFin = viernes.getMonth() + 1;
+
+    const pad = n => String(n).padStart(2, "0");
+
+    if (mIni === mFin) {
+      // Misma quincena/mes: 24-28/08
+      return `${pad(dIni)}-${pad(dFin)}/${pad(mIni)}`;
+    }
+    // La semana cruza de mes (ej. 31/08-04/09): se muestra el mes en ambos extremos
+    return `${pad(dIni)}/${pad(mIni)}-${pad(dFin)}/${pad(mFin)}`;
   };
 
   const getPaymentCount = (accountId) => {
@@ -1607,9 +1724,14 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <span style={{ color: GRAY_TXT }}><b style={{ color: BRICK }}>{deudores}</b> cuentas deben</span>
           <span style={{ color: GRAY_TXT }}><b style={{ color: GREEN }}>{fmt(totalIncome)}</b> ingresos</span>
         </div>
-        <button onClick={onAddAccount} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "none", background: INK, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
-          <Plus size={14} /> Cuenta
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => descargarReporteEscolar(accountsForReport(data))} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+            <Download size={14} /> Reporte Grado/Grupo/Maestro
+          </button>
+          <button onClick={onAddAccount} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "none", background: INK, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+            <Plus size={14} /> Cuenta
+          </button>
+        </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -1927,7 +2049,7 @@ function TruckForm({ truck, drivers, onSubmit, onDelete }) {
       <label style={labelStyle}>Chofer asignado</label>
       <select style={inputStyle} value={driverId} onChange={e => setDriverId(e.target.value)}>
         <option value="">Sin asignar</option>
-        {drivers.map(d => <option key={d.id} value={d.id}>{d.name} {d.salary ? `(${fmt(d.salary)})` : ""}</option>)}
+        {drivers.filter(d => d.role !== "ayudante").map(d => <option key={d.id} value={d.id}>{d.name} {d.salary ? `(${fmt(d.salary)})` : ""}</option>)}
       </select>
       {error && <div style={{ color: BRICK, fontSize: 12, marginBottom: 10 }}>{error}</div>}
       <button style={{ ...btnStyle, background: GREEN, marginBottom: onDelete ? 8 : 0 }} onClick={submit}>Guardar camion</button>
@@ -1947,85 +2069,53 @@ const HELPER_FREQUENCIES = [
   { id: "cada_3_semanas", label: "Cada 3 semanas" },
 ];
 
-function DriverForm({ driver, onSubmit, onDelete }) {
+const PAY_FREQUENCIES = [
+  { id: "semanal", label: "Semanal" },
+  { id: "cada_3_semanas", label: "Cada 3 semanas" },
+];
+
+function DriverForm({ driver, initialRole, onSubmit, onDelete }) {
+  const [role, setRole] = useState(driver?.role || initialRole || "chofer");
   const [name, setName] = useState(driver?.name || "");
   const [salary, setSalary] = useState(driver?.salary || "");
-  const [helpers, setHelpers] = useState(
-    driver?.helpers?.length ? driver.helpers : []
-  );
+  const [frequency, setFrequency] = useState(driver?.frequency || "semanal");
   const [error, setError] = useState("");
 
-  function addHelper() {
-    setHelpers([...helpers, { id: uid(), name: "", salary: "", frequency: "semanal" }]);
-  }
-  function updateHelper(id, field, value) {
-    setHelpers(helpers.map(h => h.id === id ? { ...h, [field]: value } : h));
-  }
-  function removeHelper(id) {
-    setHelpers(helpers.filter(h => h.id !== id));
-  }
-
   function submit() {
-    if (!name.trim()) { setError("Escribe el nombre del chofer."); return; }
-    const cleanHelpers = helpers
-      .filter(h => h.name.trim())
-      .map(h => ({ id: h.id, name: h.name.trim(), salary: h.salary ? Number(h.salary) : 0, frequency: h.frequency || "semanal" }));
-    onSubmit({ name: name.trim(), salary: salary ? Number(salary) : 0, helpers: cleanHelpers });
+    if (!name.trim()) { setError(role === "ayudante" ? "Escribe el nombre del ayudante." : "Escribe el nombre del chofer."); return; }
+    onSubmit({ name: name.trim(), salary: salary ? Number(salary) : 0, role, frequency });
   }
 
   return (
     <div>
-      <label style={labelStyle}>Nombre del chofer</label>
+      <label style={labelStyle}>Tipo</label>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <button onClick={() => setRole("chofer")} style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Inter', sans-serif", background: role === "chofer" ? INK : CHIP_BG, color: role === "chofer" ? "#fff" : GRAY_TXT }}>🚚 Chofer</button>
+        <button onClick={() => setRole("ayudante")} style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Inter', sans-serif", background: role === "ayudante" ? INK : CHIP_BG, color: role === "ayudante" ? "#fff" : GRAY_TXT }}>👥 Ayudante</button>
+      </div>
+      <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: -6, marginBottom: 14 }}>
+        Los ayudantes son independientes, no se asignan a un chofer en particular.
+      </div>
+
+      <label style={labelStyle}>Nombre {role === "ayudante" ? "del ayudante" : "del chofer"}</label>
       <input style={inputStyle} placeholder="Nombre completo" value={name} onChange={e => setName(e.target.value)} />
       
-      <label style={labelStyle}>Salario (por semana)</label>
+      <label style={labelStyle}>Salario</label>
       <input style={inputStyle} type="number" placeholder="Ej. 1800" value={salary} onChange={e => setSalary(e.target.value)} />
       <div style={{ fontSize: 11, color: GRAY_TXT, marginBottom: 12 }}>Dejar en blanco o 0 si no aplica</div>
 
-      <label style={labelStyle}>👥 Ayudantes</label>
-      <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: -2, marginBottom: 8 }}>
-        Cada ayudante puede tener su propia frecuencia de pago.
+      <label style={labelStyle}>Frecuencia de pago</label>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {PAY_FREQUENCIES.map(f => (
+          <button key={f.id} onClick={() => setFrequency(f.id)} style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Inter', sans-serif", background: frequency === f.id ? INK : CHIP_BG, color: frequency === f.id ? "#fff" : GRAY_TXT }}>{f.label}</button>
+        ))}
       </div>
-      {helpers.map(h => (
-        <div key={h.id} style={{ background: CHIP_BG, borderRadius: 10, padding: 10, marginBottom: 8 }}>
-          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <input
-              style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
-              placeholder="Nombre del ayudante"
-              value={h.name}
-              onChange={e => updateHelper(h.id, "name", e.target.value)}
-            />
-            <button onClick={() => removeHelper(h.id)} style={{ border: "none", background: BRICK_LT, color: BRICK, borderRadius: 8, width: 40, cursor: "pointer", flexShrink: 0 }}>
-              <X size={14} />
-            </button>
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input
-              style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
-              type="number"
-              placeholder="Sueldo"
-              value={h.salary}
-              onChange={e => updateHelper(h.id, "salary", e.target.value)}
-            />
-            <select
-              style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
-              value={h.frequency}
-              onChange={e => updateHelper(h.id, "frequency", e.target.value)}
-            >
-              {HELPER_FREQUENCIES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-            </select>
-          </div>
-        </div>
-      ))}
-      <button onClick={addHelper} style={{ ...btnStyle, background: CHIP_BG, color: INK, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-        <Plus size={14} /> Agregar ayudante
-      </button>
 
       {error && <div style={{ color: BRICK, fontSize: 12, marginBottom: 10 }}>{error}</div>}
-      <button style={{ ...btnStyle, background: GREEN, marginBottom: onDelete ? 8 : 0 }} onClick={submit}>Guardar chofer</button>
+      <button style={{ ...btnStyle, background: GREEN, marginBottom: onDelete ? 8 : 0 }} onClick={submit}>{role === "ayudante" ? "Guardar ayudante" : "Guardar chofer"}</button>
       {onDelete && (
         <button onClick={onDelete} style={{ ...btnStyle, background: BRICK_LT, color: BRICK, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-          <Trash2 size={14} /> Eliminar chofer
+          <Trash2 size={14} /> {role === "ayudante" ? "Eliminar ayudante" : "Eliminar chofer"}
         </button>
       )}
     </div>
@@ -2049,8 +2139,15 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
   }
 
   const initialStudents = account?.kids?.length
-    ? account.kids.map(name => ({ id: uid(), name, active: account.kidsActive ? account.kidsActive[name] !== false : true }))
-    : [{ id: uid(), name: "", active: true }];
+    ? account.kids.map(name => ({
+        id: uid(),
+        name,
+        active: account.kidsActive ? account.kidsActive[name] !== false : true,
+        grado: account.kidsInfo?.[name]?.grado || "",
+        grupo: account.kidsInfo?.[name]?.grupo || "",
+        maestro: account.kidsInfo?.[name]?.maestro || "",
+      }))
+    : [{ id: uid(), name: "", active: true, grado: "", grupo: "", maestro: "" }];
 
   const [students, setStudents] = useState(initialStudents);
   const [truckId, setTruckId] = useState(account?.truckId || trucks[0]?.id || "");
@@ -2075,8 +2172,12 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
     setRateTouched(false);
   }
 
+  function updateStudentField(id, field, value) {
+    setStudents(students.map(s => s.id === id ? { ...s, [field]: value } : s));
+  }
+
   function addStudent() {
-    setStudents([...students, { id: uid(), name: "", active: true }]);
+    setStudents([...students, { id: uid(), name: "", active: true, grado: "", grupo: "", maestro: "" }]);
     setRateTouched(false);
   }
 
@@ -2104,12 +2205,17 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
     }
 
     const kidsActive = {};
-    named.forEach(s => { kidsActive[s.name.trim()] = s.active; });
+    const kidsInfo = {};
+    named.forEach(s => {
+      kidsActive[s.name.trim()] = s.active;
+      kidsInfo[s.name.trim()] = { grado: s.grado || "", grupo: s.grupo || "", maestro: s.maestro || "" };
+    });
 
     onSubmit({
       familyName: familyLabel(named),
       kids: named.map(s => s.name.trim()),
       kidsActive,
+      kidsInfo,
       truckId,
       shift,
       category,
@@ -2159,32 +2265,54 @@ function AccountForm({ account, trucks, allAccounts, onSubmit, onDelete, onLinkF
       </div>
       {students.map((s, i) => (
         <div key={s.id} style={{
-          display: "flex", gap: 6, marginBottom: 8, alignItems: "center",
+          marginBottom: 8,
           opacity: s.active ? 1 : 0.55,
         }}>
-          <input
-            style={{ ...inputStyle, marginBottom: 0, textDecoration: s.active ? "none" : "line-through" }}
-            placeholder={i === 0 ? "Nombre del alumno principal" : `Hermano ${i}`}
-            value={s.name}
-            onChange={e => updateStudentName(s.id, e.target.value)}
-          />
-          {s.name.trim() ? (
-            <button
-              onClick={() => toggleBaja(s.id)}
-              title={s.active ? "Dar de baja" : "Reactivar"}
-              style={{
-                border: "none", borderRadius: 8, width: 40, height: 38, cursor: "pointer",
-                background: s.active ? BRICK_LT : GREEN_LT, color: s.active ? BRICK : GREEN,
-                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-              }}
-            >
-              {s.active ? <UserX size={16} /> : <Check size={16} />}
-            </button>
-          ) : students.length > 1 && (
-            <button onClick={() => removeStudentDraft(s.id)} style={{ border: "none", background: BRICK_LT, color: BRICK, borderRadius: 8, width: 40, height: 38, cursor: "pointer", flexShrink: 0 }}>
-              <X size={14} />
-            </button>
-          )}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              style={{ ...inputStyle, marginBottom: 0, textDecoration: s.active ? "none" : "line-through" }}
+              placeholder={i === 0 ? "Nombre del alumno principal" : `Hermano ${i}`}
+              value={s.name}
+              onChange={e => updateStudentName(s.id, e.target.value)}
+            />
+            {s.name.trim() ? (
+              <button
+                onClick={() => toggleBaja(s.id)}
+                title={s.active ? "Dar de baja" : "Reactivar"}
+                style={{
+                  border: "none", borderRadius: 8, width: 40, height: 38, cursor: "pointer",
+                  background: s.active ? BRICK_LT : GREEN_LT, color: s.active ? BRICK : GREEN,
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                }}
+              >
+                {s.active ? <UserX size={16} /> : <Check size={16} />}
+              </button>
+            ) : students.length > 1 && (
+              <button onClick={() => removeStudentDraft(s.id)} style={{ border: "none", background: BRICK_LT, color: BRICK, borderRadius: 8, width: 40, height: 38, cursor: "pointer", flexShrink: 0 }}>
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <input
+              style={{ ...inputStyle, marginBottom: 0, flex: 1, fontSize: 12 }}
+              placeholder="Grado"
+              value={s.grado}
+              onChange={e => updateStudentField(s.id, "grado", e.target.value)}
+            />
+            <input
+              style={{ ...inputStyle, marginBottom: 0, flex: 1, fontSize: 12 }}
+              placeholder="Grupo"
+              value={s.grupo}
+              onChange={e => updateStudentField(s.id, "grupo", e.target.value)}
+            />
+            <input
+              style={{ ...inputStyle, marginBottom: 0, flex: 1.5, fontSize: 12 }}
+              placeholder="Maestro(a)"
+              value={s.maestro}
+              onChange={e => updateStudentField(s.id, "maestro", e.target.value)}
+            />
+          </div>
         </div>
       ))}
       <button onClick={addStudent} style={{ ...btnStyle, background: CHIP_BG, color: INK, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
