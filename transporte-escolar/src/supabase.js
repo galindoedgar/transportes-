@@ -30,13 +30,14 @@ export async function guardarDatos(data) {
   try {
     const errores = [];
 
-    // Choferes (incluye ayudantes/helpers como jsonb)
+    // Choferes y ayudantes (independientes, distinguidos por "role")
     {
       const payload = data.drivers.map(d => ({
         id: d.id,
         name: d.name,
         salary: d.salary || 0,
-        helpers: d.helpers || [],
+        role: d.role || "chofer",
+        frequency: d.frequency || "semanal",
       }));
       if (payload.length > 0) {
         const { error } = await supabase.from('drivers').upsert(payload, { onConflict: 'id' });
@@ -64,6 +65,7 @@ export async function guardarDatos(data) {
         family_name: account.familyName,
         kids: account.kids,
         kids_active: account.kidsActive || {},
+        kids_info: account.kidsInfo || {},
         truck_id: account.truckId,
         shift: account.shift,
         category: account.category,
@@ -116,6 +118,23 @@ export async function guardarDatos(data) {
       if (errDel) errores.push({ tabla: 'expenses (borrar)', error: errDel });
     }
 
+    // Periodos inactivos (vacaciones)
+    {
+      const periodos = data.periodosInactivos || [];
+      const payload = periodos.map(p => ({
+        id: p.id,
+        nombre: p.nombre,
+        desde: p.desde,
+        hasta: p.hasta,
+      }));
+      if (payload.length > 0) {
+        const { error } = await supabase.from('periodos_inactivos').upsert(payload, { onConflict: 'id' });
+        if (error) errores.push({ tabla: 'periodos_inactivos', error });
+      }
+      const errDel = await borrarNoPresentes('periodos_inactivos', periodos.map(p => p.id));
+      if (errDel) errores.push({ tabla: 'periodos_inactivos (borrar)', error: errDel });
+    }
+
     if (errores.length > 0) {
       errores.forEach(e => console.error(`Error guardando ${e.tabla}:`, e.error));
       return { success: false, errores };
@@ -150,15 +169,20 @@ export async function cargarDatos() {
     const { data: expenses, error: errExpenses } = await supabase.from('expenses').select('*')
     if (errExpenses) throw errExpenses
 
+    // Cargar periodos inactivos (vacaciones)
+    const { data: periodosInactivos, error: errPeriodos } = await supabase.from('periodos_inactivos').select('*')
+    if (errPeriodos) throw errPeriodos
+
     // Convertir a formato app.js
     return {
-      drivers: drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0, helpers: d.helpers || [] })),
+      drivers: drivers.map(d => ({ id: d.id, name: d.name, salary: d.salary || 0, role: d.role || "chofer", frequency: d.frequency || "semanal", helpers: d.helpers || [] })),
       trucks: trucks.map(t => ({ id: t.id, name: t.name, driverId: t.driver_id })),
       accounts: accounts.map(a => ({
         id: a.id,
         familyName: a.family_name,
         kids: a.kids || [],
         kidsActive: a.kids_active || {},
+        kidsInfo: a.kids_info || {},
         truckId: a.truck_id,
         shift: a.shift,
         category: a.category,
@@ -182,6 +206,12 @@ export async function cargarDatos() {
         amount: e.amount,
         desc: e.description || '',
         date: e.date,
+      })),
+      periodosInactivos: periodosInactivos.map(p => ({
+        id: p.id,
+        nombre: p.nombre,
+        desde: p.desde,
+        hasta: p.hasta,
       })),
     }
   } catch (error) {

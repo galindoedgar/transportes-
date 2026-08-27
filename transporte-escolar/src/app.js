@@ -110,17 +110,21 @@ function csvEscape(value) {
   return str;
 }
 
-function descargarReporteEscolar(accounts) {
-  const filas = [["Nombre", "Tipo", "Grado", "Grupo", "Maestro"]];
-  accounts.forEach(a => {
-    const tipoLabel = TIPOS_SERVICIO.find(t => t.id === a.tipoServicio)?.label || a.tipoServicio;
-    a.kids.forEach(name => {
-      const activo = !a.kidsActive || a.kidsActive[name] !== false;
-      if (!activo) return;
-      const info = a.kidsInfo?.[name] || {};
-      filas.push([name, tipoLabel, info.grado || "", info.grupo || "", info.maestro || ""]);
+function descargarReporteEscolar(accounts, tipoFiltro, turnoFiltro) {
+  const filas = [["Nombre", "Tipo", "Turno", "Grado", "Grupo", "Maestro"]];
+  accounts
+    .filter(a => (tipoFiltro === "all" || a.tipoServicio === tipoFiltro))
+    .filter(a => (turnoFiltro === "all" || a.shift === turnoFiltro))
+    .forEach(a => {
+      const tipoLabel = TIPOS_SERVICIO.find(t => t.id === a.tipoServicio)?.label || a.tipoServicio;
+      const turnoLabel = a.shift === "AM" ? "Mañana" : "Tarde";
+      a.kids.forEach(name => {
+        const activo = !a.kidsActive || a.kidsActive[name] !== false;
+        if (!activo) return;
+        const info = a.kidsInfo?.[name] || {};
+        filas.push([name, tipoLabel, turnoLabel, info.grado || "", info.grupo || "", info.maestro || ""]);
+      });
     });
-  });
   const csv = filas.map(fila => fila.map(csvEscape).join(",")).join("\n");
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
@@ -132,6 +136,37 @@ function descargarReporteEscolar(accounts) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+// ============ PERIODOS INACTIVOS (vacaciones) ============
+// Le dicen al sistema "esta semana no hay actividad" (vacaciones de diciembre,
+// semana santa, fin/inicio de cursos) para que no se marque como pendiente de
+// pago a nadie durante esos rangos de fechas.
+function semanaEsInactiva(weekMondayStr, periodos) {
+  if (!periodos || periodos.length === 0) return false;
+  const lunes = new Date(weekMondayStr + "T00:00:00");
+  const viernes = new Date(lunes);
+  viernes.setDate(viernes.getDate() + 4);
+  return periodos.some(p => {
+    if (!p.desde || !p.hasta) return false;
+    const desde = new Date(p.desde + "T00:00:00");
+    const hasta = new Date(p.hasta + "T00:00:00");
+    return lunes <= hasta && viernes >= desde;
+  });
+}
+
+function semanasActivas(weeks, periodos) {
+  return weeks.filter(w => !semanaEsInactiva(w, periodos));
+}
+
+// Para no marcar a nadie como "deudor" en semanas de vacaciones: solo cuenta
+// las semanas activas dentro del rango dado, y compara pagos contra esas.
+function infoDeudor(accountId, weeks, data) {
+  const activas = semanasActivas(weeks, data.periodosInactivos);
+  if (activas.length === 0) return { esDeudor: false, pagadas: 0, esperadas: 0 };
+  const pagadas = data.payments.filter(p => p.accountId === accountId && activas.includes(p.period)).length;
+  return { esDeudor: pagadas < activas.length, pagadas, esperadas: activas.length };
+}
+
 
 function getWeekStart(d) {
   const date = new Date(d);
@@ -158,6 +193,7 @@ function emptyData() {
     accounts: [],
     payments: [],
     expenses: [],
+    periodosInactivos: [],
   };
 }
 
@@ -636,6 +672,15 @@ export default function App() {
     setData(next); persist(next);
   }
 
+  function addPeriodoInactivo(form) {
+    const next = { ...data, periodosInactivos: [...(data.periodosInactivos || []), { id: uid(), ...form }] };
+    setData(next); persist(next);
+  }
+  function deletePeriodoInactivo(id) {
+    const next = { ...data, periodosInactivos: (data.periodosInactivos || []).filter(p => p.id !== id) };
+    setData(next); persist(next);
+  }
+
   if (currentScreen === "home") {
     const totalStudentsHistorico = data.accounts.reduce((acc, a) => acc + a.kids.length, 0);
     const alumnosActivos = data.accounts.reduce((acc, a) => {
@@ -646,6 +691,8 @@ export default function App() {
     const paidCount = data.accounts.filter(a => 
       data.payments.some(p => p.accountId === a.id && p.period === currentPeriod(a))
     ).length;
+    const semanaActualInactiva = semanaEsInactiva(getWeekStart(new Date()), data.periodosInactivos);
+    const pendientes = semanaActualInactiva ? 0 : data.accounts.length - paidCount;
 
     return (
       <div style={{ background: BG, minHeight: 600, fontFamily: "'Inter', sans-serif", padding: 20, borderRadius: 20 }}>
@@ -729,8 +776,14 @@ export default function App() {
             </div>
             <div>
               <div style={{ fontSize: 11, color: GRAY_TXT }}>Cuentas pendientes</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: BRICK }}>{data.accounts.length - paidCount}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: BRICK }}>{pendientes}</div>
             </div>
+            {semanaActualInactiva && (
+              <div>
+                <div style={{ fontSize: 11, color: GRAY_TXT }}>Esta semana</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: ORANGE }}>🏖️ Vacaciones</div>
+              </div>
+            )}
             {alumnosBaja > 0 && (
               <div>
                 <div style={{ fontSize: 11, color: GRAY_TXT }}>Dados de baja</div>
@@ -1090,6 +1143,8 @@ export default function App() {
           onEditAccount={acc => setModal({ type: "account", account: acc })}
           onMarkPaid={markPaid}
           onUndoPayment={undoPayment}
+          onAddPeriodoInactivo={addPeriodoInactivo}
+          onDeletePeriodoInactivo={deletePeriodoInactivo}
         />
       )}
 
@@ -1539,14 +1594,71 @@ function FlotaScreen({ data, onAddTruck, onEditTruck, onAddDriver, onEditDriver,
   );
 }
 
+function VacacionesModal({ data, onAdd, onDelete, onClose }) {
+  const [nombre, setNombre] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [error, setError] = useState("");
+
+  const periodos = [...(data.periodosInactivos || [])].sort((a, b) => (a.desde || "").localeCompare(b.desde || ""));
+
+  function submit() {
+    if (!nombre.trim()) { setError("Ponle un nombre (ej. Vacaciones de diciembre)."); return; }
+    if (!desde || !hasta) { setError("Elige la fecha de inicio y de fin."); return; }
+    if (desde > hasta) { setError("La fecha de inicio no puede ser despues de la de fin."); return; }
+    onAdd({ nombre: nombre.trim(), desde, hasta });
+    setNombre(""); setDesde(""); setHasta(""); setError("");
+  }
+
+  return (
+    <Modal title="🏖️ Periodos inactivos (vacaciones)" onClose={onClose}>
+      <div style={{ fontSize: 12, color: GRAY_TXT, marginBottom: 14 }}>
+        Las semanas dentro de estos rangos no se van a marcar como "pendiente de pago" ni contar como deudor,
+        ya que no hay actividad (vacaciones de diciembre, semana santa, fin/inicio de cursos, etc.).
+      </div>
+
+      {periodos.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          {periodos.map(p => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: CHIP_BG, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{p.nombre}</div>
+                <div style={{ fontSize: 11, color: GRAY_TXT }}>{p.desde} a {p.hasta}</div>
+              </div>
+              <button onClick={() => onDelete(p.id)} style={{ border: "none", background: BRICK_LT, color: BRICK, borderRadius: 8, width: 32, height: 32, cursor: "pointer", flexShrink: 0 }}>
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <label style={labelStyle}>Nombre del periodo</label>
+      <input style={inputStyle} placeholder="Ej. Vacaciones de diciembre" value={nombre} onChange={e => setNombre(e.target.value)} />
+
+      <label style={labelStyle}>Desde</label>
+      <input style={inputStyle} type="date" value={desde} onChange={e => setDesde(e.target.value)} />
+
+      <label style={labelStyle}>Hasta</label>
+      <input style={inputStyle} type="date" value={hasta} onChange={e => setHasta(e.target.value)} />
+
+      {error && <div style={{ color: BRICK, fontSize: 12, marginBottom: 10 }}>{error}</div>}
+      <button style={{ ...btnStyle, background: GREEN }} onClick={submit}>
+        Agregar periodo
+      </button>
+    </Modal>
+  );
+}
+
 // ============ COMPONENTE CLIENTES CON FILTROS ============
 
-function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoPayment }) {
+function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoPayment, onAddPeriodoInactivo, onDeletePeriodoInactivo }) {
   const [truckFilter, setTruckFilter] = useState("all");
   const [turnoFilter, setTurnoFilter] = useState("all");
   const [tipoFilter, setTipoFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [clickTimeout, setClickTimeout] = useState({});
+  const [showVacaciones, setShowVacaciones] = useState(false);
   const listRef = useRef(null);
   const [scrollPosition, setScrollPosition] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -1578,10 +1690,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
       return weeks;
     };
     const weeks = getWeeks();
-    accounts = accounts.filter(a => {
-      const paidCount = data.payments.filter(p => p.accountId === a.id && weeks.includes(p.period)).length;
-      return paidCount < 4;
-    });
+    accounts = accounts.filter(a => infoDeudor(a.id, weeks, data).esDeudor);
   }
 
   if (searchTerm.trim()) {
@@ -1666,7 +1775,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     return tipo ? tipo.label : "Sin especificar";
   };
 
-  const deudores = data.accounts.filter(a => getPaymentCount(a.id) < 4).length;
+  const deudores = data.accounts.filter(a => infoDeudor(a.id, weeks, data).esDeudor).length;
 
   const getAlumnosPorTipo = (tipoId) => {
     return data.accounts
@@ -1724,15 +1833,22 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <span style={{ color: GRAY_TXT }}><b style={{ color: BRICK }}>{deudores}</b> cuentas deben</span>
           <span style={{ color: GRAY_TXT }}><b style={{ color: GREEN }}>{fmt(totalIncome)}</b> ingresos</span>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => descargarReporteEscolar(accountsForReport(data))} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
-            <Download size={14} /> Reporte Grado/Grupo/Maestro
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setShowVacaciones(true)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+            🏖️ Vacaciones
+          </button>
+          <button onClick={() => descargarReporteEscolar(accountsForReport(data), tipoFilter, turnoFilter)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+            <Download size={14} /> Reporte{tipoFilter !== "all" || turnoFilter !== "all" ? " (filtrado)" : ""}
           </button>
           <button onClick={onAddAccount} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "none", background: INK, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
             <Plus size={14} /> Cuenta
           </button>
         </div>
       </div>
+
+      {showVacaciones && (
+        <VacacionesModal data={data} onAdd={onAddPeriodoInactivo} onDelete={onDeletePeriodoInactivo} onClose={() => setShowVacaciones(false)} />
+      )}
 
       <div style={{ marginBottom: 12 }}>
         <SearchBar 
@@ -1895,19 +2011,21 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
               {weeks.map((week, wi) => {
                 const payment = data.payments.find(p => p.accountId === a.id && p.period === week);
                 const isPaid = !!payment;
+                const inactiva = !isPaid && semanaEsInactiva(week, data.periodosInactivos);
                 
                 return (
                   <div key={wi} style={{ textAlign: "center" }}>
                     <button 
                       onClick={() => handleWeekClick(a.id, week, a.rate, isPaid, payment?.id)}
                       disabled={clickTimeout[a.id]}
+                      title={inactiva ? "Semana marcada como vacaciones/sin actividad" : undefined}
                       style={{ 
                         width: "100%", 
                         padding: "12px 8px", 
                         borderRadius: 8, 
-                        border: isPaid ? `2px solid ${GREEN}` : `2px dashed ${BORDER}`, 
-                        background: isPaid ? GREEN_LT : "transparent", 
-                        color: isPaid ? GREEN : GRAY_TXT, 
+                        border: isPaid ? `2px solid ${GREEN}` : inactiva ? `2px dashed ${ORANGE}` : `2px dashed ${BORDER}`, 
+                        background: isPaid ? GREEN_LT : inactiva ? ORANGE_LT : "transparent", 
+                        color: isPaid ? GREEN : inactiva ? ORANGE : GRAY_TXT, 
                         cursor: "pointer", 
                         fontSize: 16, 
                         fontWeight: 700,
@@ -1917,21 +2035,21 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
                         opacity: clickTimeout[a.id] ? 0.6 : 1,
                       }}
                       onMouseEnter={(e) => {
-                        if (!isPaid) {
+                        if (!isPaid && !inactiva) {
                           e.currentTarget.style.border = `2px solid ${BRICK}`;
                           e.currentTarget.style.background = BRICK_LT;
                           e.currentTarget.style.color = BRICK;
                         }
                       }}
                       onMouseLeave={(e) => {
-                        if (!isPaid) {
+                        if (!isPaid && !inactiva) {
                           e.currentTarget.style.border = `2px dashed ${BORDER}`;
                           e.currentTarget.style.background = "transparent";
                           e.currentTarget.style.color = GRAY_TXT;
                         }
                       }}
                     >
-                      {isPaid ? "✅ Pagado" : "⬜ Pendiente"}
+                      {isPaid ? "✅ Pagado" : inactiva ? "🏖️ Vacaciones" : "⬜ Pendiente"}
                     </button>
                   </div>
                 );
