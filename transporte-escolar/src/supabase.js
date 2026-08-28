@@ -135,6 +135,15 @@ export async function guardarDatos(data) {
       if (errDel) errores.push({ tabla: 'periodos_inactivos (borrar)', error: errDel });
     }
 
+    // Configuracion (fila unica: inicio del ciclo escolar, etc.)
+    {
+      const { error } = await supabase.from('configuracion').upsert(
+        { id: 'app', ciclo_escolar_inicio: data.cicloEscolarInicio || '2026-08-31' },
+        { onConflict: 'id' }
+      );
+      if (error) errores.push({ tabla: 'configuracion', error });
+    }
+
     if (errores.length > 0) {
       errores.forEach(e => console.error(`Error guardando ${e.tabla}:`, e.error));
       return { success: false, errores };
@@ -172,6 +181,10 @@ export async function cargarDatos() {
     // Cargar periodos inactivos (vacaciones)
     const { data: periodosInactivos, error: errPeriodos } = await supabase.from('periodos_inactivos').select('*')
     if (errPeriodos) throw errPeriodos
+
+    // Cargar configuracion (fila unica)
+    const { data: configuracion, error: errConfig } = await supabase.from('configuracion').select('*').eq('id', 'app').maybeSingle()
+    if (errConfig) throw errConfig
 
     // Convertir a formato app.js
     return {
@@ -213,6 +226,7 @@ export async function cargarDatos() {
         desde: p.desde,
         hasta: p.hasta,
       })),
+      cicloEscolarInicio: configuracion?.ciclo_escolar_inicio || '2026-08-31',
     }
   } catch (error) {
     console.error('Error cargando datos:', error)

@@ -110,7 +110,7 @@ function csvEscape(value) {
   return str;
 }
 
-function descargarReporteEscolar(accounts, tipoFiltro, turnoFiltro) {
+async function descargarReporteEscolar(accounts, tipoFiltro, turnoFiltro) {
   const filas = [["Nombre", "Tipo", "Turno", "Grado", "Grupo", "Maestro"]];
   accounts
     .filter(a => (tipoFiltro === "all" || a.tipoServicio === tipoFiltro))
@@ -126,11 +126,28 @@ function descargarReporteEscolar(accounts, tipoFiltro, turnoFiltro) {
       });
     });
   const csv = filas.map(fila => fila.map(csvEscape).join(",")).join("\n");
+  const nombreArchivo = `reporte-grado-grupo-maestro-${toLocalISODate(new Date())}.csv`;
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+
+  // En celular (sobre todo iPhone/Safari) el truco del link con "download" no
+  // siempre funciona y falla en silencio sin marcar error. Si el navegador
+  // soporta compartir archivos nativamente, usamos eso -> abre el menu de
+  // "Guardar en Archivos / Compartir" del propio telefono.
+  try {
+    const file = new File([blob], nombreArchivo, { type: "text/csv" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: nombreArchivo });
+      return;
+    }
+  } catch (e) {
+    // Si cancelan el share o falla, seguimos con la descarga normal de abajo.
+  }
+
+  // Computadora (o celulares donde no aplica lo de arriba): descarga directa.
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `reporte-grado-grupo-maestro-${toLocalISODate(new Date())}.csv`;
+  a.download = nombreArchivo;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -176,6 +193,15 @@ function getWeekStart(d) {
   return toLocalISODate(date);
 }
 
+// Numero real de semana contando desde el inicio del ciclo escolar (configurable),
+// en vez de un "1-4" relativo que cambiaba de significado cada dia.
+function weekNumberSinceCycle(weekMondayStr, cicloInicioStr) {
+  const inicio = new Date((cicloInicioStr || "2026-08-31") + "T00:00:00");
+  const semana = new Date(weekMondayStr + "T00:00:00");
+  const dias = Math.round((semana - inicio) / (1000 * 60 * 60 * 24));
+  return Math.floor(dias / 7) + 1;
+}
+
 function getMonthStart(d) {
   const date = new Date(d);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
@@ -194,6 +220,7 @@ function emptyData() {
     payments: [],
     expenses: [],
     periodosInactivos: [],
+    cicloEscolarInicio: "2026-08-31",
   };
 }
 
@@ -261,6 +288,7 @@ async function loadData() {
     const data = await cargarDatos();
     if (data && data.trucks && data.trucks.length > 0) {
       data.accounts = backfillAccounts(data.accounts);
+      data.cicloEscolarInicio = data.cicloEscolarInicio || "2026-08-31";
       const antes = JSON.stringify(data.drivers);
       data.drivers = migrateDrivers(data.drivers);
       // Guardar en localStorage como respaldo
@@ -678,6 +706,10 @@ export default function App() {
   }
   function deletePeriodoInactivo(id) {
     const next = { ...data, periodosInactivos: (data.periodosInactivos || []).filter(p => p.id !== id) };
+    setData(next); persist(next);
+  }
+  function setCicloEscolarInicio(fecha) {
+    const next = { ...data, cicloEscolarInicio: fecha };
     setData(next); persist(next);
   }
 
@@ -1145,6 +1177,7 @@ export default function App() {
           onUndoPayment={undoPayment}
           onAddPeriodoInactivo={addPeriodoInactivo}
           onDeletePeriodoInactivo={deletePeriodoInactivo}
+          onSetCicloEscolar={setCicloEscolarInicio}
         />
       )}
 
@@ -1652,13 +1685,39 @@ function VacacionesModal({ data, onAdd, onDelete, onClose }) {
 
 // ============ COMPONENTE CLIENTES CON FILTROS ============
 
-function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoPayment, onAddPeriodoInactivo, onDeletePeriodoInactivo }) {
+function CicloEscolarModal({ data, onSave, onClose }) {
+  const [fecha, setFecha] = useState(data.cicloEscolarInicio || "2026-08-31");
+  const [error, setError] = useState("");
+
+  function submit() {
+    if (!fecha) { setError("Elige la fecha de inicio del ciclo."); return; }
+    const d = new Date(fecha + "T00:00:00");
+    if (d.getDay() !== 1) { setError("Esa fecha no es lunes. El ciclo debe empezar en lunes."); return; }
+    onSave(fecha);
+    onClose();
+  }
+
+  return (
+    <Modal title="📅 Inicio del ciclo escolar" onClose={onClose}>
+      <div style={{ fontSize: 12, color: GRAY_TXT, marginBottom: 14 }}>
+        A partir de este lunes se empieza a contar "Semana 1". Cambialo cada vez que arranque un ciclo escolar nuevo.
+      </div>
+      <label style={labelStyle}>Lunes de inicio</label>
+      <input style={inputStyle} type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
+      {error && <div style={{ color: BRICK, fontSize: 12, marginBottom: 10 }}>{error}</div>}
+      <button style={{ ...btnStyle, background: GREEN }} onClick={submit}>Guardar</button>
+    </Modal>
+  );
+}
+
+function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoPayment, onAddPeriodoInactivo, onDeletePeriodoInactivo, onSetCicloEscolar }) {
   const [truckFilter, setTruckFilter] = useState("all");
   const [turnoFilter, setTurnoFilter] = useState("all");
   const [tipoFilter, setTipoFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [clickTimeout, setClickTimeout] = useState({});
   const [showVacaciones, setShowVacaciones] = useState(false);
+  const [showCiclo, setShowCiclo] = useState(false);
   const listRef = useRef(null);
   const [scrollPosition, setScrollPosition] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -1837,6 +1896,9 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <button onClick={() => setShowVacaciones(true)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
             🏖️ Vacaciones
           </button>
+          <button onClick={() => setShowCiclo(true)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
+            📅 Ciclo escolar
+          </button>
           <button onClick={() => descargarReporteEscolar(accountsForReport(data), tipoFilter, turnoFilter)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
             <Download size={14} /> Reporte{tipoFilter !== "all" || turnoFilter !== "all" ? " (filtrado)" : ""}
           </button>
@@ -1848,6 +1910,10 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
 
       {showVacaciones && (
         <VacacionesModal data={data} onAdd={onAddPeriodoInactivo} onDelete={onDeletePeriodoInactivo} onClose={() => setShowVacaciones(false)} />
+      )}
+
+      {showCiclo && (
+        <CicloEscolarModal data={data} onSave={onSetCicloEscolar} onClose={() => setShowCiclo(false)} />
       )}
 
       <div style={{ marginBottom: 12 }}>
@@ -1939,7 +2005,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <div>Cliente</div>
           {weeks.map((w, i) => (
             <div key={i} style={{ textAlign: "center", fontSize: 13 }}>
-              Semana {i + 1}
+              Semana {weekNumberSinceCycle(w, data.cicloEscolarInicio)}
               <div style={{ fontSize: 11, fontWeight: 400 }}>{formatWeekLabel(w)}</div>
             </div>
           ))}
