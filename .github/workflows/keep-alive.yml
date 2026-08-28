@@ -1,0 +1,23 @@
+name: Supabase Keep-Alive
+
+# Supabase (plan gratuito) pausa el proyecto si pasan ~7 dias sin ninguna
+# peticion. Este workflow le manda una consulta minima cada pocos dias
+# para que nunca llegue a esos 7 dias de inactividad (util sobre todo en
+# vacaciones de diciembre / semana santa, cuando nadie usa la app).
+
+on:
+  schedule:
+    # Lunes y jueves a las 8:00 am UTC (2:00 am hora Monterrey)
+    - cron: "0 8 * * 1,4"
+  workflow_dispatch: {}  # tambien lo puedes correr manualmente desde la pestana "Actions"
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping a Supabase
+        run: |
+          curl -s -o /dev/null -w "Status: %{http_code}\n" \
+            "https://lxdrvyudpayligrkioke.supabase.co/rest/v1/" \
+            -H "apikey: sb_publishable_53XxbYQFzoLL2mnM9SLqbg_cn874C1l" \
+            -H "Authorization: Bearer sb_publishable_53XxbYQFzoLL2mnM9SLqbg_cn874C1l"
