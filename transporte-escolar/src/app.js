@@ -175,6 +175,30 @@ function semanasActivas(weeks, periodos) {
   return weeks.filter(w => !semanaEsInactiva(w, periodos));
 }
 
+// Semanas del mes calendario actual: Semana 1 = primer lunes del mes, hasta
+// Semana 4. Se reinicia solo cada mes (como en la libreta de papel), sin
+// importar el ciclo escolar.
+function getMonthWeeks(today) {
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  let d = new Date(year, month, 1);
+  while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
+  const weeks = [];
+  for (let i = 0; i < 4; i++) {
+    weeks.push(toLocalISODate(d));
+    d.setDate(d.getDate() + 7);
+  }
+  return weeks;
+}
+
+// De las 4 semanas del mes, solo las que ya llegaron o son la actual cuentan
+// para marcar deudor -> si estamos en semana 2, la semana 1 sin pagar ya
+// pone en rojo, pero la semana 3 y 4 (todavia no llegan) no cuentan en contra.
+function semanasVencidas(weeksDelMes, today) {
+  const semanaActual = getWeekStart(today);
+  return weeksDelMes.filter(w => w <= semanaActual);
+}
+
 // Para no marcar a nadie como "deudor" en semanas de vacaciones: solo cuenta
 // las semanas activas dentro del rango dado, y compara pagos contra esas.
 function infoDeudor(accountId, weeks, data) {
@@ -1717,7 +1741,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
   const [searchTerm, setSearchTerm] = useState("");
   const [clickTimeout, setClickTimeout] = useState({});
   const [showVacaciones, setShowVacaciones] = useState(false);
-  const [showCiclo, setShowCiclo] = useState(false);
   const listRef = useRef(null);
   const [scrollPosition, setScrollPosition] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -1737,19 +1760,8 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
   }
 
   if (truckFilter === "deudores") {
-    const getWeeks = () => {
-      const weeks = [];
-      const today = new Date();
-      const currentWeekStart = getWeekStart(today);
-      for (let i = 0; i < 4; i++) {
-        const d = new Date(currentWeekStart + "T00:00:00");
-        d.setDate(d.getDate() - i * 7);
-        weeks.push(d.toISOString().slice(0, 10));
-      }
-      return weeks;
-    };
-    const weeks = getWeeks();
-    accounts = accounts.filter(a => infoDeudor(a.id, weeks, data).esDeudor);
+    const vencidas = semanasVencidas(getMonthWeeks(new Date()), new Date());
+    accounts = accounts.filter(a => infoDeudor(a.id, vencidas, data).esDeudor);
   }
 
   if (searchTerm.trim()) {
@@ -1782,20 +1794,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     }
   }, [selectedAccountId, scrollPosition]);
 
-  const getWeeks = () => {
-    const weeks = [];
-    const today = new Date();
-    const currentWeekStart = getWeekStart(today);
-    for (let i = 0; i < 4; i++) {
-      const d = new Date(currentWeekStart + "T00:00:00");
-      d.setDate(d.getDate() - i * 7);
-      weeks.push(d.toISOString().slice(0, 10));
-    }
-    // Semana 1 = la mas antigua, a la izquierda. Semana 4 = la actual, a la derecha.
-    return weeks.reverse();
-  };
-
-  const weeks = getWeeks();
+  const weeks = getMonthWeeks(new Date());
   
   const formatWeekLabel = (dateStr) => {
     const lunes = new Date(dateStr + "T00:00:00");
@@ -1834,7 +1833,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     return tipo ? tipo.label : "Sin especificar";
   };
 
-  const deudores = data.accounts.filter(a => infoDeudor(a.id, weeks, data).esDeudor).length;
+  const deudores = data.accounts.filter(a => infoDeudor(a.id, semanasVencidas(weeks, new Date()), data).esDeudor).length;
 
   const getAlumnosPorTipo = (tipoId) => {
     return data.accounts
@@ -1896,9 +1895,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <button onClick={() => setShowVacaciones(true)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
             🏖️ Vacaciones
           </button>
-          <button onClick={() => setShowCiclo(true)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
-            📅 Ciclo escolar
-          </button>
           <button onClick={() => descargarReporteEscolar(accountsForReport(data), tipoFilter, turnoFilter)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: INK, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'Inter', sans-serif" }}>
             <Download size={14} /> Reporte{tipoFilter !== "all" || turnoFilter !== "all" ? " (filtrado)" : ""}
           </button>
@@ -1910,10 +1906,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
 
       {showVacaciones && (
         <VacacionesModal data={data} onAdd={onAddPeriodoInactivo} onDelete={onDeletePeriodoInactivo} onClose={() => setShowVacaciones(false)} />
-      )}
-
-      {showCiclo && (
-        <CicloEscolarModal data={data} onSave={onSetCicloEscolar} onClose={() => setShowCiclo(false)} />
       )}
 
       <div style={{ marginBottom: 12 }}>
@@ -2005,7 +1997,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           <div>Cliente</div>
           {weeks.map((w, i) => (
             <div key={i} style={{ textAlign: "center", fontSize: 13 }}>
-              Semana {weekNumberSinceCycle(w, data.cicloEscolarInicio)}
+              Semana {i + 1}
               <div style={{ fontSize: 11, fontWeight: 400 }}>{formatWeekLabel(w)}</div>
             </div>
           ))}
@@ -2078,20 +2070,22 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
                 const payment = data.payments.find(p => p.accountId === a.id && p.period === week);
                 const isPaid = !!payment;
                 const inactiva = !isPaid && semanaEsInactiva(week, data.periodosInactivos);
+                const vencida = week <= getWeekStart(new Date());
+                const esRojo = !isPaid && !inactiva && vencida;
                 
                 return (
                   <div key={wi} style={{ textAlign: "center" }}>
                     <button 
                       onClick={() => handleWeekClick(a.id, week, a.rate, isPaid, payment?.id)}
                       disabled={clickTimeout[a.id]}
-                      title={inactiva ? "Semana marcada como vacaciones/sin actividad" : undefined}
+                      title={inactiva ? "Semana marcada como vacaciones/sin actividad" : esRojo ? "Semana vencida sin pagar" : undefined}
                       style={{ 
                         width: "100%", 
                         padding: "12px 8px", 
                         borderRadius: 8, 
-                        border: isPaid ? `2px solid ${GREEN}` : inactiva ? `2px dashed ${ORANGE}` : `2px dashed ${BORDER}`, 
-                        background: isPaid ? GREEN_LT : inactiva ? ORANGE_LT : "transparent", 
-                        color: isPaid ? GREEN : inactiva ? ORANGE : GRAY_TXT, 
+                        border: isPaid ? `2px solid ${GREEN}` : inactiva ? `2px dashed ${ORANGE}` : esRojo ? `2px solid ${BRICK}` : `2px dashed ${BORDER}`, 
+                        background: isPaid ? GREEN_LT : inactiva ? ORANGE_LT : esRojo ? BRICK_LT : "transparent", 
+                        color: isPaid ? GREEN : inactiva ? ORANGE : esRojo ? BRICK : GRAY_TXT, 
                         cursor: "pointer", 
                         fontSize: 16, 
                         fontWeight: 700,
@@ -2101,21 +2095,21 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
                         opacity: clickTimeout[a.id] ? 0.6 : 1,
                       }}
                       onMouseEnter={(e) => {
-                        if (!isPaid && !inactiva) {
+                        if (!isPaid && !inactiva && !esRojo) {
                           e.currentTarget.style.border = `2px solid ${BRICK}`;
                           e.currentTarget.style.background = BRICK_LT;
                           e.currentTarget.style.color = BRICK;
                         }
                       }}
                       onMouseLeave={(e) => {
-                        if (!isPaid && !inactiva) {
+                        if (!isPaid && !inactiva && !esRojo) {
                           e.currentTarget.style.border = `2px dashed ${BORDER}`;
                           e.currentTarget.style.background = "transparent";
                           e.currentTarget.style.color = GRAY_TXT;
                         }
                       }}
                     >
-                      {isPaid ? "✅ Pagado" : inactiva ? "🏖️ Vacaciones" : "⬜ Pendiente"}
+                      {isPaid ? "✅ Pagado" : inactiva ? "🏖️ Vacaciones" : esRojo ? "🔴 Debe" : "⬜ Pendiente"}
                     </button>
                   </div>
                 );
