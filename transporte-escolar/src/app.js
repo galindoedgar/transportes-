@@ -175,18 +175,41 @@ function semanasActivas(weeks, periodos) {
   return weeks.filter(w => !semanaEsInactiva(w, periodos));
 }
 
-// Semanas del mes calendario actual: Semana 1 = primer lunes del mes, hasta
-// Semana 4. Se reinicia solo cada mes (como en la libreta de papel), sin
-// importar el ciclo escolar.
-function getMonthWeeks(today) {
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  let d = new Date(year, month, 1);
-  while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
+// A que mes (año-mes) le toca una semana que empieza en weekStartStr (lunes).
+// Regla: se cuentan los 5 dias (lunes a viernes) de esa semana y se le asigna
+// al mes donde caigan MAS dias. Si hay empate (semanas de 4 dias partidas
+// 2-2), se le asigna al mes del lunes.
+function assignMonthToWeek(weekStartStr) {
+  const start = new Date(weekStartStr + "T00:00:00");
+  const mondayKey = `${start.getFullYear()}-${start.getMonth()}`;
+  const counts = {};
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(start);
+    d.setDate(d.getDate() + i);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const maxCount = Math.max(...Object.values(counts));
+  const ganadores = Object.keys(counts).filter(k => counts[k] === maxCount);
+  return ganadores.includes(mondayKey) ? mondayKey : ganadores[0];
+}
+
+// Todas las semanas (lunes de inicio) que le tocan a un mes dado, aunque
+// empiecen en el mes anterior o terminen en el siguiente (usa la regla de
+// mayoria de dias de arriba). Segun el mes, regresa 4 o 5 semanas -- nunca
+// se fuerza un numero fijo, para que nunca quede una semana sin hogar.
+function getWeeksForMonth(year, month) {
+  const targetKey = `${year}-${month}`;
+  const firstDay = new Date(year, month, 1);
+  let cursor = new Date(getWeekStart(new Date(firstDay.getTime() - 7 * 24 * 60 * 60 * 1000)) + "T00:00:00");
+  const limite = new Date(year, month + 1, 14); // margen amplio hacia el mes siguiente
   const weeks = [];
-  for (let i = 0; i < 4; i++) {
-    weeks.push(toLocalISODate(d));
-    d.setDate(d.getDate() + 7);
+  while (cursor <= limite) {
+    const weekStartStr = toLocalISODate(cursor);
+    if (assignMonthToWeek(weekStartStr) === targetKey) {
+      weeks.push(weekStartStr);
+    }
+    cursor.setDate(cursor.getDate() + 7);
   }
   return weeks;
 }
@@ -196,7 +219,7 @@ function getMonthWeeks(today) {
 // pone en rojo, pero la semana 3 y 4 (todavia no llegan) no cuentan en contra.
 function semanasVencidas(weeksDelMes, today) {
   const semanaActual = getWeekStart(today);
-  return weeksDelMes.filter(w => w <= semanaActual);
+  return weeksDelMes.filter(w => w < semanaActual);
 }
 
 // Para no marcar a nadie como "deudor" en semanas de vacaciones: solo cuenta
@@ -233,6 +256,13 @@ function getMonthStart(d) {
 
 function currentPeriod(account) {
   return account.frequency === "mensual" ? getMonthStart(new Date()) : getWeekStart(new Date());
+}
+
+// Igual que currentPeriod, pero anclado a la semana que se acaba de marcar
+// (no a "hoy") -- necesario para que el auto-marcado de hermanos vinculados
+// funcione bien al capturar pagos de meses distintos al actual.
+function periodForWeek(account, weekStr) {
+  return account.frequency === "mensual" ? getMonthStart(new Date(weekStr + "T00:00:00")) : weekStr;
 }
 
 // DATOS VACÍOS
@@ -1744,7 +1774,19 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
   const listRef = useRef(null);
   const [scrollPosition, setScrollPosition] = useState(0);
   const [selectedAccountId, setSelectedAccountId] = useState(null);
-  
+  const [viewDate, setViewDate] = useState(() => new Date());
+
+  const selectedYear = viewDate.getFullYear();
+  const selectedMonth = viewDate.getMonth();
+  const hoy = new Date();
+  const esMesActual = selectedYear === hoy.getFullYear() && selectedMonth === hoy.getMonth();
+  const weeks = getWeeksForMonth(selectedYear, selectedMonth);
+  const nombreMes = viewDate.toLocaleDateString("es-MX", { month: "long", year: "numeric" });
+  const nombreMesCap = nombreMes.charAt(0).toUpperCase() + nombreMes.slice(1);
+  const goPrevMonth = () => setViewDate(new Date(selectedYear, selectedMonth - 1, 1));
+  const goNextMonth = () => setViewDate(new Date(selectedYear, selectedMonth + 1, 1));
+  const goToday = () => setViewDate(new Date());
+
   let accounts = data.accounts;
 
   if (truckFilter !== "all" && truckFilter !== "deudores") {
@@ -1760,7 +1802,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
   }
 
   if (truckFilter === "deudores") {
-    const vencidas = semanasVencidas(getMonthWeeks(new Date()), new Date());
+    const vencidas = semanasVencidas(weeks, new Date());
     accounts = accounts.filter(a => infoDeudor(a.id, vencidas, data).esDeudor);
   }
 
@@ -1794,8 +1836,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     }
   }, [selectedAccountId, scrollPosition]);
 
-  const weeks = getMonthWeeks(new Date());
-  
   const formatWeekLabel = (dateStr) => {
     const lunes = new Date(dateStr + "T00:00:00");
     const viernes = new Date(lunes);
@@ -1860,13 +1900,13 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     if (acc && acc.familyId) {
       const siblings = data.accounts.filter(a => a.familyId === acc.familyId && a.id !== accountId);
       const pendientes = siblings.filter(s => {
-        const period = currentPeriod(s);
+        const period = periodForWeek(s, week);
         return !data.payments.some(p => p.accountId === s.id && p.period === period);
       });
       if (pendientes.length > 0) {
         const nombres = pendientes.map(s => s.familyName).join(", ");
         if (window.confirm(`👨‍👩‍👧‍👦 "${acc.familyName}" tiene hermano(s) vinculado(s) en otra ruta: ${nombres}.\n\n¿Marcar tambien su pago de este periodo?`)) {
-          pendientes.forEach(s => onMarkPaid(s.id, currentPeriod(s), s.rate));
+          pendientes.forEach(s => onMarkPaid(s.id, periodForWeek(s, week), s.rate));
         }
       }
     }
@@ -1907,6 +1947,34 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
       {showVacaciones && (
         <VacacionesModal data={data} onAdd={onAddPeriodoInactivo} onDelete={onDeletePeriodoInactivo} onClose={() => setShowVacaciones(false)} />
       )}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 12, background: CARD, borderRadius: 12, padding: "8px 12px" }}>
+        <button
+          onClick={goPrevMonth}
+          style={{ border: "none", background: CHIP_BG, color: INK, borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 16, fontWeight: 700 }}
+          title="Mes anterior"
+        >
+          ◀
+        </button>
+        <div style={{ minWidth: 150, textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{nombreMesCap}</div>
+          {!esMesActual && (
+            <button
+              onClick={goToday}
+              style={{ border: "none", background: "none", color: BLUE, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: 0, textDecoration: "underline" }}
+            >
+              Volver a hoy
+            </button>
+          )}
+        </div>
+        <button
+          onClick={goNextMonth}
+          style={{ border: "none", background: CHIP_BG, color: INK, borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 16, fontWeight: 700 }}
+          title="Mes siguiente"
+        >
+          ▶
+        </button>
+      </div>
 
       <div style={{ marginBottom: 12 }}>
         <SearchBar 
@@ -1985,7 +2053,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
       <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
         <div style={{ 
           display: "grid", 
-          gridTemplateColumns: "2fr 1.2fr 1.2fr 1.2fr 1.2fr", 
+          gridTemplateColumns: `2fr repeat(${weeks.length}, 1.2fr)`, 
           background: CHIP_BG, 
           padding: "12px 16px", 
           fontSize: 13, 
@@ -2026,7 +2094,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
                 padding: "12px 16px", 
                 borderTop: i === 0 ? "none" : `1px solid ${BORDER}`,
                 display: "grid",
-                gridTemplateColumns: "2fr 1.2fr 1.2fr 1.2fr 1.2fr",
+                gridTemplateColumns: `2fr repeat(${weeks.length}, 1.2fr)`,
                 gap: 6,
                 alignItems: "center",
                 background: isSelected ? BLUE_LT : "transparent",
@@ -2070,7 +2138,7 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
                 const payment = data.payments.find(p => p.accountId === a.id && p.period === week);
                 const isPaid = !!payment;
                 const inactiva = !isPaid && semanaEsInactiva(week, data.periodosInactivos);
-                const vencida = week <= getWeekStart(new Date());
+                const vencida = week < getWeekStart(new Date());
                 const esRojo = !isPaid && !inactiva && vencida;
                 
                 return (
