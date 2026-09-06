@@ -381,13 +381,36 @@ async function loadData() {
   return empty;
 }
 
+// persist() vive fuera del componente App, pero necesita poder actualizar el
+// indicador de sincronizacion (que si vive dentro de App). App conecta este
+// puntero a su setSyncStatus al montar.
+let reportarEstadoGuardado = null;
+
+function formatearErroresGuardado(errores) {
+  return (errores || [])
+    .map(e => `${e.tabla}: ${e.error?.message || e.error?.details || e.error?.hint || "error desconocido"}`)
+    .join(" · ");
+}
+
 async function persist(data) {
   // Guardar en localStorage (respaldo local)
   try { await window.storage.set("transescolar-data-v3", JSON.stringify(data), false); } catch (e) {}
-  
-  // Guardar en Supabase (nube)
-  try { await guardarDatos(data); } catch (e) {
-    console.log("Error guardando en Supabase:", e);
+
+  // Guardar en Supabase (nube) -- guardarDatos() NO lanza excepcion cuando una
+  // tabla falla, regresa { success:false, errores:[...] }, asi que hay que
+  // revisar el resultado explicitamente para no dejar pasar fallos en silencio.
+  try {
+    const resultado = await guardarDatos(data);
+    if (resultado && resultado.success === false) {
+      const detalle = formatearErroresGuardado(resultado.errores);
+      console.error("Fallo al guardar en Supabase:", detalle);
+      if (reportarEstadoGuardado) reportarEstadoGuardado({ synced: false, message: `❌ No se guardó: ${detalle}` });
+    } else if (reportarEstadoGuardado) {
+      reportarEstadoGuardado({ synced: true, message: "Sincronizado" });
+    }
+  } catch (e) {
+    console.error("Error guardando en Supabase:", e);
+    if (reportarEstadoGuardado) reportarEstadoGuardado({ synced: false, message: `❌ No se guardó: ${e.message || e}` });
   }
 }
 
@@ -586,6 +609,11 @@ export default function App() {
 
   useEffect(() => { loadData().then(setData); }, []);
 
+  useEffect(() => {
+    reportarEstadoGuardado = setSyncStatus;
+    return () => { reportarEstadoGuardado = null; };
+  }, []);
+
   const stats = useMemo(() => {
     if (!data) return null;
     
@@ -653,13 +681,19 @@ export default function App() {
   async function syncToCloud() {
     setSyncStatus({ synced: false, message: "Sincronizando..." });
     try {
-      await guardarDatos(data);
+      const resultado = await guardarDatos(data);
+      if (resultado && resultado.success === false) {
+        const detalle = formatearErroresGuardado(resultado.errores);
+        setSyncStatus({ synced: false, message: `❌ No se guardó: ${detalle}` });
+        console.error("Error sincronizando:", detalle);
+        return;
+      }
       setSyncStatus({ synced: true, message: "✅ Sincronizado con la nube" });
       setTimeout(() => {
         setSyncStatus({ synced: true, message: "Sincronizado" });
       }, 3000);
     } catch (error) {
-      setSyncStatus({ synced: false, message: "❌ Error al sincronizar" });
+      setSyncStatus({ synced: false, message: `❌ ${error.message || "Error al sincronizar"}` });
       console.error("Error sincronizando:", error);
     }
   }
@@ -793,7 +827,7 @@ export default function App() {
             <div style={{ fontSize: 13, color: GRAY_TXT }}>{data.trucks.length} camiones · {alumnosActivos} alumnos activos</div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 11, color: syncStatus.synced ? GREEN : BRICK }}>
+            <span title={syncStatus.message} style={{ fontSize: 11, color: syncStatus.synced ? GREEN : BRICK, maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {syncStatus.message}
             </span>
             <button 
