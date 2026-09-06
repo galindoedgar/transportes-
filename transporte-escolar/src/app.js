@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
 } from "recharts";
-import { Bus, Fuel, Wrench, Shield, Users, Plus, TrendingUp, TrendingDown, Wallet, Sun, Moon, X, Check, Pencil, Trash2, UserCircle, Banknote, Calendar, Home, ClipboardList, Truck, LayoutDashboard, Settings, DollarSign, School, User, Clock, Search, UserX, Cloud, CloudOff, Download } from "lucide-react";
+import { Bus, Fuel, Wrench, Shield, Users, Plus, TrendingUp, TrendingDown, Wallet, Sun, Moon, X, Check, Pencil, Trash2, UserCircle, Banknote, Calendar, Home, ClipboardList, Truck, LayoutDashboard, Settings, DollarSign, School, User, Clock, Search, UserX, Cloud, CloudOff, Download, History } from "lucide-react";
 import { supabase, cargarDatos, guardarDatos } from './supabase';
 
 // ============ CONFIGURACIÓN DE ALMACENAMIENTO ============
@@ -382,9 +382,10 @@ async function loadData() {
 }
 
 // persist() vive fuera del componente App, pero necesita poder actualizar el
-// indicador de sincronizacion (que si vive dentro de App). App conecta este
-// puntero a su setSyncStatus al montar.
+// indicador de sincronizacion y el historial (que si viven dentro de App).
+// App conecta estos punteros a sus setters al montar.
 let reportarEstadoGuardado = null;
+let agregarLogEntry = null;
 
 function formatearErroresGuardado(errores) {
   return (errores || [])
@@ -399,18 +400,22 @@ async function persist(data) {
   // Guardar en Supabase (nube) -- guardarDatos() NO lanza excepcion cuando una
   // tabla falla, regresa { success:false, errores:[...] }, asi que hay que
   // revisar el resultado explicitamente para no dejar pasar fallos en silencio.
+  const ts = new Date().toISOString();
   try {
     const resultado = await guardarDatos(data);
     if (resultado && resultado.success === false) {
       const detalle = formatearErroresGuardado(resultado.errores);
       console.error("Fallo al guardar en Supabase:", detalle);
       if (reportarEstadoGuardado) reportarEstadoGuardado({ synced: false, message: `❌ No se guardó: ${detalle}` });
-    } else if (reportarEstadoGuardado) {
-      reportarEstadoGuardado({ synced: true, message: "Sincronizado" });
+      if (agregarLogEntry) agregarLogEntry({ ts, ok: false, detail: detalle, origin: "auto" });
+    } else {
+      if (reportarEstadoGuardado) reportarEstadoGuardado({ synced: true, message: "Sincronizado" });
+      if (agregarLogEntry) agregarLogEntry({ ts, ok: true, detail: "Guardado correctamente", origin: "auto" });
     }
   } catch (e) {
     console.error("Error guardando en Supabase:", e);
     if (reportarEstadoGuardado) reportarEstadoGuardado({ synced: false, message: `❌ No se guardó: ${e.message || e}` });
+    if (agregarLogEntry) agregarLogEntry({ ts, ok: false, detail: e.message || String(e), origin: "auto" });
   }
 }
 
@@ -450,7 +455,50 @@ function RouteStrip({ shift }) {
   );
 }
 
-// ============ MODAL BLOQUEADO - No se cierra al hacer clic fuera ============
+// ============ MODAL: HISTORIAL DE GUARDADO ============
+// Bitacora local (ultimos 50 intentos) de guardado en la nube -- para poder
+// revisar despues, sin depender de haber visto el aviso rojo en el momento,
+// que fallo, cuando, y por que.
+function SyncLogModal({ log, onClose }) {
+  return (
+    <Modal title="Historial de guardado" onClose={onClose}>
+      <div style={{ fontSize: 12, color: GRAY_TXT, marginBottom: 12 }}>
+        Los últimos {log.length} intentos de guardar en la nube (automáticos y manuales). En rojo, lo que falló.
+      </div>
+      {log.length === 0 && (
+        <div style={{ textAlign: "center", color: GRAY_TXT, fontSize: 13, padding: 20 }}>
+          Todavía no hay historial registrado.
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {log.map((entry, i) => {
+          const fecha = new Date(entry.ts);
+          const fechaTxt = fecha.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+          return (
+            <div key={i} style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "flex-start",
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: entry.ok ? CHIP_BG : BRICK_LT,
+            }}>
+              <span style={{ fontSize: 14 }}>{entry.ok ? "✅" : "❌"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: entry.ok ? INK : BRICK }}>
+                  {fechaTxt} · {entry.origin === "manual" ? "Sincronización manual" : "Guardado automático"}
+                </div>
+                <div style={{ fontSize: 12, color: entry.ok ? GRAY_TXT : BRICK }}>{entry.detail}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+
 function Modal({ title, onClose, children }) {
   useEffect(() => {
     const handleEscape = (e) => {
@@ -607,11 +655,27 @@ export default function App() {
   const [adminAccess, setAdminAccess] = useState(false);
   const ADMIN_KEY = "admin123";
 
+  const [syncLog, setSyncLog] = useState([]);
+  const [showSyncLog, setShowSyncLog] = useState(false);
+
   useEffect(() => { loadData().then(setData); }, []);
 
   useEffect(() => {
+    window.storage.get("transescolar-sync-log-v1", false)
+      .then(res => { if (res && res.value) setSyncLog(JSON.parse(res.value)); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     reportarEstadoGuardado = setSyncStatus;
-    return () => { reportarEstadoGuardado = null; };
+    agregarLogEntry = (entry) => {
+      setSyncLog(prev => {
+        const next = [entry, ...prev].slice(0, 50);
+        window.storage.set("transescolar-sync-log-v1", JSON.stringify(next), false).catch(() => {});
+        return next;
+      });
+    };
+    return () => { reportarEstadoGuardado = null; agregarLogEntry = null; };
   }, []);
 
   const stats = useMemo(() => {
@@ -680,21 +744,25 @@ export default function App() {
   // ============ FUNCIÓN PARA SINCRONIZAR MANUALMENTE ============
   async function syncToCloud() {
     setSyncStatus({ synced: false, message: "Sincronizando..." });
+    const ts = new Date().toISOString();
     try {
       const resultado = await guardarDatos(data);
       if (resultado && resultado.success === false) {
         const detalle = formatearErroresGuardado(resultado.errores);
         setSyncStatus({ synced: false, message: `❌ No se guardó: ${detalle}` });
         console.error("Error sincronizando:", detalle);
+        if (agregarLogEntry) agregarLogEntry({ ts, ok: false, detail: detalle, origin: "manual" });
         return;
       }
       setSyncStatus({ synced: true, message: "✅ Sincronizado con la nube" });
+      if (agregarLogEntry) agregarLogEntry({ ts, ok: true, detail: "Sincronización manual correcta", origin: "manual" });
       setTimeout(() => {
         setSyncStatus({ synced: true, message: "Sincronizado" });
       }, 3000);
     } catch (error) {
       setSyncStatus({ synced: false, message: `❌ ${error.message || "Error al sincronizar"}` });
       console.error("Error sincronizando:", error);
+      if (agregarLogEntry) agregarLogEntry({ ts, ok: false, detail: error.message || String(error), origin: "manual" });
     }
   }
 
@@ -843,8 +911,25 @@ export default function App() {
             >
               <Cloud size={18} color={syncStatus.synced ? BLUE : BRICK} />
             </button>
+            <button 
+              onClick={() => setShowSyncLog(true)}
+              title="Historial de guardado"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 4,
+                borderRadius: 4,
+              }}
+            >
+              <History size={18} color={GRAY_TXT} />
+            </button>
           </div>
         </div>
+
+        {showSyncLog && (
+          <SyncLogModal log={syncLog} onClose={() => setShowSyncLog(false)} />
+        )}
 
         <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
           <StatCard label="Ingresos" value={fmt(stats.totalIncome)} tone="green" Icon={TrendingUp} />
