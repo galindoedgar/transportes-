@@ -979,6 +979,10 @@ export default function App() {
     const semanaActualInactiva = semanaEsInactiva(getWeekStart(new Date()), data.periodosInactivos);
     const pendientes = semanaActualInactiva ? 0 : data.accounts.length - paidCount;
 
+    const reporteSemanal = getWeeklyReport(data.payments, data.expenses);
+    const semanaActualRow = reporteSemanal[reporteSemanal.length - 1] || null;
+    const semanaPasadaRow = reporteSemanal[reporteSemanal.length - 2] || null;
+
     return (
       <div style={{ background: BG, minHeight: 600, fontFamily: "'Inter', sans-serif", padding: 20, borderRadius: 20 }}>
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600;700&display=swap');`}</style>
@@ -1028,10 +1032,25 @@ export default function App() {
           <SyncLogModal log={syncLog} onClose={() => setShowSyncLog(false)} />
         )}
 
-        <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
           <StatCard label="Ingresos" value={fmt(stats.totalIncome)} tone="green" Icon={TrendingUp} />
           <StatCard label="Gastos" value={fmt(stats.totalExpense)} tone="brick" Icon={TrendingDown} />
           <StatCard label="Balance" value={fmt(stats.balance)} tone="neutral" Icon={Wallet} />
+        </div>
+
+        <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
+          <StatCard
+            label={semanaActualRow ? `Balance esta semana (${semanaActualRow.label})` : "Balance esta semana"}
+            value={fmt(semanaActualRow ? semanaActualRow.balance : 0)}
+            tone={(semanaActualRow?.balance ?? 0) >= 0 ? "blue" : "brick"}
+            Icon={Wallet}
+          />
+          <StatCard
+            label={semanaPasadaRow ? `Balance semana pasada (${semanaPasadaRow.label})` : "Balance semana pasada"}
+            value={fmt(semanaPasadaRow ? semanaPasadaRow.balance : 0)}
+            tone={(semanaPasadaRow?.balance ?? 0) >= 0 ? "blue" : "brick"}
+            Icon={Wallet}
+          />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 24 }}>
