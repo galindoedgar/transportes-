@@ -254,6 +254,56 @@ function getMonthStart(d) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
+// Etiqueta legible de una semana ("24-28/08" o "31/08-04/09" si cruza mes).
+// Reutilizada tanto en Clientes como en el reporte semanal de Gastos/Dashboard.
+function formatWeekLabel(dateStr) {
+  const lunes = new Date(dateStr + "T00:00:00");
+  const viernes = new Date(lunes);
+  viernes.setDate(viernes.getDate() + 4);
+
+  const dIni = lunes.getDate();
+  const mIni = lunes.getMonth() + 1;
+  const dFin = viernes.getDate();
+  const mFin = viernes.getMonth() + 1;
+
+  const pad = n => String(n).padStart(2, "0");
+
+  if (mIni === mFin) {
+    return `${pad(dIni)}-${pad(dFin)}/${pad(mIni)}`;
+  }
+  return `${pad(dIni)}/${pad(mIni)}-${pad(dFin)}/${pad(mFin)}`;
+}
+
+// Tabla comparativa semana por semana: ingresos (pagos) y gastos, usando la
+// FECHA REAL en que se registro cada movimiento (no el periodo que ese pago
+// cubre) -- para reflejar el flujo de caja real semana a semana. Regresa
+// filas de la semana mas vieja con actividad hasta la semana actual, en
+// orden cronologico ascendente (el que las muestre puede invertir el orden
+// si prefiere ver lo mas reciente arriba).
+function getWeeklyReport(payments, expenses) {
+  const allDates = [...payments.map(p => p.date), ...expenses.map(e => e.date)].filter(Boolean);
+  if (allDates.length === 0) return [];
+
+  const minDate = allDates.reduce((a, b) => (a < b ? a : b));
+  let cursor = new Date(getWeekStart(new Date(minDate + "T00:00:00")) + "T00:00:00");
+  const semanaActual = new Date(getWeekStart(new Date()) + "T00:00:00");
+
+  const rows = [];
+  while (cursor <= semanaActual) {
+    const weekStart = toLocalISODate(cursor);
+    const weekEndDate = new Date(cursor);
+    weekEndDate.setDate(weekEndDate.getDate() + 6);
+    const weekEnd = toLocalISODate(weekEndDate);
+
+    const ingresos = payments.filter(p => p.date >= weekStart && p.date <= weekEnd).reduce((s, p) => s + p.amount, 0);
+    const gastos = expenses.filter(e => e.date >= weekStart && e.date <= weekEnd).reduce((s, e) => s + e.amount, 0);
+
+    rows.push({ weekStart, weekEnd, label: formatWeekLabel(weekStart), ingresos, gastos, balance: ingresos - gastos });
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return rows;
+}
+
 function currentPeriod(account) {
   return account.frequency === "mensual" ? getMonthStart(new Date()) : getWeekStart(new Date());
 }
@@ -451,6 +501,53 @@ function RouteStrip({ shift }) {
           </React.Fragment>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ============ TABLA: REPORTE SEMANAL DE INGRESOS Y GASTOS ============
+// Una fila por semana (la mas reciente arriba) comparando ingresos, gastos
+// y balance -- para ver de un vistazo como va cada semana en vez de solo
+// el acumulado historico.
+function WeeklyReportTable({ payments, expenses }) {
+  const rows = useMemo(() => getWeeklyReport(payments, expenses).slice().reverse(), [payments, expenses]);
+
+  return (
+    <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+        background: CHIP_BG,
+        padding: "10px 16px",
+        fontSize: 12,
+        fontWeight: 700,
+        color: GRAY_TXT,
+      }}>
+        <div>Semana</div>
+        <div style={{ textAlign: "right" }}>Ingresos</div>
+        <div style={{ textAlign: "right" }}>Gastos</div>
+        <div style={{ textAlign: "right" }}>Balance</div>
+      </div>
+      {rows.length === 0 && (
+        <div style={{ padding: 20, textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>
+          Todavía no hay pagos ni gastos registrados.
+        </div>
+      )}
+      {rows.map((r, i) => (
+        <div key={r.weekStart} style={{
+          display: "grid",
+          gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+          padding: "10px 16px",
+          borderTop: i === 0 ? "none" : `1px solid ${BORDER}`,
+          fontSize: 13,
+          alignItems: "center",
+        }}>
+          <div style={{ fontWeight: 600, color: INK }}>{r.label}</div>
+          <div style={{ textAlign: "right", color: GREEN, fontWeight: 600 }}>{fmt(r.ingresos)}</div>
+          <div style={{ textAlign: "right", color: BRICK, fontWeight: 600 }}>{fmt(r.gastos)}</div>
+          <div style={{ textAlign: "right", color: r.balance >= 0 ? INK : BRICK, fontWeight: 700 }}>{fmt(r.balance)}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1380,6 +1477,11 @@ export default function App() {
                 <StatCard label="Balance neto" value={fmt(stats.balance)} tone="neutral" Icon={Wallet} />
               </div>
 
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
+                <WeeklyReportTable payments={data.payments} expenses={data.expenses} />
+              </div>
+
               <div style={{ background: CARD, borderRadius: 14, padding: 16, marginBottom: 16 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 10 }}>Gastos por camion</div>
                 <div style={{ height: 220 }}>
@@ -1534,6 +1636,11 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
         <StatCard label="Seguro" value={fmt(totalSeguro)} tone="blue" Icon={Shield} />
         <StatCard label="Salario" value={fmt(totalSalario)} tone="neutral" Icon={Banknote} />
         <StatCard label="Total Gastos" value={fmt(totalGeneral)} tone="brick" Icon={Wallet} />
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
+        <WeeklyReportTable payments={data.payments} expenses={data.expenses} />
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -1955,25 +2062,6 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
     }
   }, [selectedAccountId, scrollPosition]);
 
-  const formatWeekLabel = (dateStr) => {
-    const lunes = new Date(dateStr + "T00:00:00");
-    const viernes = new Date(lunes);
-    viernes.setDate(viernes.getDate() + 4);
-
-    const dIni = lunes.getDate();
-    const mIni = lunes.getMonth() + 1;
-    const dFin = viernes.getDate();
-    const mFin = viernes.getMonth() + 1;
-
-    const pad = n => String(n).padStart(2, "0");
-
-    if (mIni === mFin) {
-      // Misma quincena/mes: 24-28/08
-      return `${pad(dIni)}-${pad(dFin)}/${pad(mIni)}`;
-    }
-    // La semana cruza de mes (ej. 31/08-04/09): se muestra el mes en ambos extremos
-    return `${pad(dIni)}/${pad(mIni)}-${pad(dFin)}/${pad(mFin)}`;
-  };
 
   const getPaymentCount = (accountId) => {
     return data.payments.filter(p => p.accountId === accountId && weeks.includes(p.period)).length;
