@@ -277,6 +277,17 @@ function formatWeekLabel(dateStr) {
 // Suma de gastos por categoria dentro de una semana (lunes a domingo), usando
 // la fecha real en que se registro el gasto -- mismo criterio que ya usa
 // getWeeklyReport, para que ambos reportes coincidan entre si.
+// Filtra pagos o gastos (cualquier arreglo con campo .date) a los que caen
+// dentro de una semana especifica (lunes a domingo). Se usa para que los
+// recuadros de arriba puedan "enfocarse" en la semana que se seleccione en
+// la tabla semanal, en vez de mostrar siempre el total historico.
+function filtrarPorSemana(items, weekStart) {
+  const weekEndDate = new Date(weekStart + "T00:00:00");
+  weekEndDate.setDate(weekEndDate.getDate() + 6);
+  const weekEnd = toLocalISODate(weekEndDate);
+  return items.filter(item => item.date >= weekStart && item.date <= weekEnd);
+}
+
 function gastosPorCategoriaEnSemana(expenses, weekStart, categorias) {
   const weekEndDate = new Date(weekStart + "T00:00:00");
   weekEndDate.setDate(weekEndDate.getDate() + 6);
@@ -586,8 +597,9 @@ function DetalleGastosSemana({ expenses }) {
   );
 }
 
-function WeeklyReportTable({ payments, expenses }) {
+function WeeklyReportTable({ payments, expenses, selectedWeek, onSelectWeek }) {
   const rows = useMemo(() => getWeeklyReport(payments, expenses).slice().reverse(), [payments, expenses]);
+  const clickable = typeof onSelectWeek === "function";
 
   return (
     <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
@@ -600,7 +612,7 @@ function WeeklyReportTable({ payments, expenses }) {
         fontWeight: 700,
         color: GRAY_TXT,
       }}>
-        <div>Semana</div>
+        <div>Semana{clickable ? " (dale clic para enfocar)" : ""}</div>
         <div style={{ textAlign: "right" }}>Ingresos</div>
         <div style={{ textAlign: "right" }}>Gastos</div>
         <div style={{ textAlign: "right" }}>Balance</div>
@@ -610,21 +622,31 @@ function WeeklyReportTable({ payments, expenses }) {
           Todavía no hay pagos ni gastos registrados.
         </div>
       )}
-      {rows.map((r, i) => (
-        <div key={r.weekStart} style={{
-          display: "grid",
-          gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
-          padding: "10px 16px",
-          borderTop: i === 0 ? "none" : `1px solid ${BORDER}`,
-          fontSize: 13,
-          alignItems: "center",
-        }}>
-          <div style={{ fontWeight: 600, color: INK }}>{r.label}</div>
-          <div style={{ textAlign: "right", color: GREEN, fontWeight: 600 }}>{fmt(r.ingresos)}</div>
-          <div style={{ textAlign: "right", color: BRICK, fontWeight: 600 }}>{fmt(r.gastos)}</div>
-          <div style={{ textAlign: "right", color: r.balance >= 0 ? INK : BRICK, fontWeight: 700 }}>{fmt(r.balance)}</div>
-        </div>
-      ))}
+      {rows.map((r, i) => {
+        const isSelected = selectedWeek === r.weekStart;
+        return (
+          <div
+            key={r.weekStart}
+            onClick={clickable ? () => onSelectWeek(isSelected ? null : r.weekStart) : undefined}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+              padding: "10px 16px",
+              borderTop: i === 0 ? "none" : `1px solid ${BORDER}`,
+              borderLeft: isSelected ? `3px solid ${BLUE}` : "3px solid transparent",
+              fontSize: 13,
+              alignItems: "center",
+              cursor: clickable ? "pointer" : "default",
+              background: isSelected ? CHIP_BG : "transparent",
+            }}
+          >
+            <div style={{ fontWeight: 600, color: INK }}>{r.label}{isSelected ? " ✓" : ""}</div>
+            <div style={{ textAlign: "right", color: GREEN, fontWeight: 600 }}>{fmt(r.ingresos)}</div>
+            <div style={{ textAlign: "right", color: BRICK, fontWeight: 600 }}>{fmt(r.gastos)}</div>
+            <div style={{ textAlign: "right", color: r.balance >= 0 ? INK : BRICK, fontWeight: 700 }}>{fmt(r.balance)}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -821,6 +843,7 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState("home");
   const [mainView, setMainView] = useState("clientes");
   const [view, setView] = useState("general");
+  const [weekFilterDashboard, setWeekFilterDashboard] = useState(null);
   const [modal, setModal] = useState(null);
   const [syncStatus, setSyncStatus] = useState({ synced: true, message: "Sincronizado" });
   
@@ -1572,15 +1595,34 @@ export default function App() {
 
           {view === "general" && (
             <>
-              <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-                <StatCard label="Ingresos totales" value={fmt(stats.totalIncome)} tone="green" Icon={TrendingUp} />
-                <StatCard label="Gastos totales" value={fmt(stats.totalExpense)} tone="brick" Icon={TrendingDown} />
-                <StatCard label="Balance neto" value={fmt(stats.balance)} tone="neutral" Icon={Wallet} />
-              </div>
+              {weekFilterDashboard && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: BLUE_LT, borderRadius: 8, fontSize: 13 }}>
+                  <span style={{ color: BLUE, fontWeight: 600 }}>📌 Mostrando solo la semana {formatWeekLabel(weekFilterDashboard)}</span>
+                  <button onClick={() => setWeekFilterDashboard(null)} style={{ marginLeft: "auto", border: "none", background: "none", color: BLUE, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
+                    Ver todo ✕
+                  </button>
+                </div>
+              )}
+              {(() => {
+                const ingresosMostrados = weekFilterDashboard
+                  ? filtrarPorSemana(data.payments, weekFilterDashboard).reduce((s, p) => s + p.amount, 0)
+                  : stats.totalIncome;
+                const gastosMostrados = weekFilterDashboard
+                  ? filtrarPorSemana(data.expenses, weekFilterDashboard).reduce((s, e) => s + e.amount, 0)
+                  : stats.totalExpense;
+                const balanceMostrado = ingresosMostrados - gastosMostrados;
+                return (
+                  <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+                    <StatCard label={weekFilterDashboard ? "Ingresos (semana)" : "Ingresos totales"} value={fmt(ingresosMostrados)} tone="green" Icon={TrendingUp} />
+                    <StatCard label={weekFilterDashboard ? "Gastos (semana)" : "Gastos totales"} value={fmt(gastosMostrados)} tone="brick" Icon={TrendingDown} />
+                    <StatCard label={weekFilterDashboard ? "Balance (semana)" : "Balance neto"} value={fmt(balanceMostrado)} tone="neutral" Icon={Wallet} />
+                  </div>
+                );
+              })()}
 
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
-                <WeeklyReportTable payments={data.payments} expenses={data.expenses} />
+                <WeeklyReportTable payments={data.payments} expenses={data.expenses} selectedWeek={weekFilterDashboard} onSelectWeek={setWeekFilterDashboard} />
               </div>
 
               <div style={{ background: CARD, borderRadius: 14, padding: 16, marginBottom: 16 }}>
@@ -1688,6 +1730,7 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
   const [truckFilter, setTruckFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [weekFilter, setWeekFilter] = useState(null);
 
   let filteredExpenses = data.expenses;
 
@@ -1712,12 +1755,16 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
   filteredExpenses = filteredExpenses.sort((a, b) => b.date.localeCompare(a.date));
 
-  const totalGasolina = data.expenses.filter(e => e.category === "gasolina").reduce((s, e) => s + e.amount, 0);
-  const totalPiezas = data.expenses.filter(e => e.category === "piezas").reduce((s, e) => s + e.amount, 0);
-  const totalSeguro = data.expenses.filter(e => e.category === "seguro").reduce((s, e) => s + e.amount, 0);
-  const totalSalario = data.expenses.filter(e => e.category === "salario").reduce((s, e) => s + e.amount, 0);
-  const totalOtro = data.expenses.filter(e => e.category === "otro").reduce((s, e) => s + e.amount, 0);
-  const totalGeneral = data.expenses.reduce((s, e) => s + e.amount, 0);
+  // Si hay una semana seleccionada en la tabla de abajo, los recuadros de
+  // arriba se enfocan solo en esa semana; si no, muestran el total historico.
+  const expensesParaTotales = weekFilter ? filtrarPorSemana(data.expenses, weekFilter) : data.expenses;
+
+  const totalGasolina = expensesParaTotales.filter(e => e.category === "gasolina").reduce((s, e) => s + e.amount, 0);
+  const totalPiezas = expensesParaTotales.filter(e => e.category === "piezas").reduce((s, e) => s + e.amount, 0);
+  const totalSeguro = expensesParaTotales.filter(e => e.category === "seguro").reduce((s, e) => s + e.amount, 0);
+  const totalSalario = expensesParaTotales.filter(e => e.category === "salario").reduce((s, e) => s + e.amount, 0);
+  const totalOtro = expensesParaTotales.filter(e => e.category === "otro").reduce((s, e) => s + e.amount, 0);
+  const totalGeneral = expensesParaTotales.reduce((s, e) => s + e.amount, 0);
 
   const getTruckName = (id) => {
     const truck = data.trucks.find(t => t.id === id);
@@ -1731,6 +1778,14 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
   return (
     <div>
+      {weekFilter && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: BLUE_LT, borderRadius: 8, fontSize: 13 }}>
+          <span style={{ color: BLUE, fontWeight: 600 }}>📌 Mostrando solo la semana {formatWeekLabel(weekFilter)}</span>
+          <button onClick={() => setWeekFilter(null)} style={{ marginLeft: "auto", border: "none", background: "none", color: BLUE, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
+            Ver todo ✕
+          </button>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <StatCard label="Gasolina" value={fmt(totalGasolina)} tone="orange" Icon={Fuel} />
         <StatCard label="Piezas" value={fmt(totalPiezas)} tone="brick" Icon={Wrench} />
@@ -1741,7 +1796,7 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
-        <WeeklyReportTable payments={data.payments} expenses={data.expenses} />
+        <WeeklyReportTable payments={data.payments} expenses={data.expenses} selectedWeek={weekFilter} onSelectWeek={setWeekFilter} />
       </div>
 
       <div style={{ marginBottom: 20 }}>
