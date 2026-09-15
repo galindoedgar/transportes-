@@ -843,7 +843,7 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState("home");
   const [mainView, setMainView] = useState("clientes");
   const [view, setView] = useState("general");
-  const [weekFilterDashboard, setWeekFilterDashboard] = useState(null);
+  const [weekFilterDashboard, setWeekFilterDashboard] = useState(getWeekStart(new Date()));
   const [modal, setModal] = useState(null);
   const [syncStatus, setSyncStatus] = useState({ synced: true, message: "Sincronizado" });
   
@@ -1595,34 +1595,51 @@ export default function App() {
 
           {view === "general" && (
             <>
-              {weekFilterDashboard && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: BLUE_LT, borderRadius: 8, fontSize: 13 }}>
-                  <span style={{ color: BLUE, fontWeight: 600 }}>📌 Mostrando solo la semana {formatWeekLabel(weekFilterDashboard)}</span>
-                  <button onClick={() => setWeekFilterDashboard(null)} style={{ marginLeft: "auto", border: "none", background: "none", color: BLUE, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
-                    Ver todo ✕
-                  </button>
-                </div>
-              )}
               {(() => {
-                const ingresosMostrados = weekFilterDashboard
-                  ? filtrarPorSemana(data.payments, weekFilterDashboard).reduce((s, p) => s + p.amount, 0)
-                  : stats.totalIncome;
-                const gastosMostrados = weekFilterDashboard
-                  ? filtrarPorSemana(data.expenses, weekFilterDashboard).reduce((s, e) => s + e.amount, 0)
-                  : stats.totalExpense;
+                const semanaActualDashDefault = getWeekStart(new Date());
+                const esAcumulado = weekFilterDashboard === "acumulado";
+                const ingresosMostrados = esAcumulado
+                  ? stats.totalIncome
+                  : filtrarPorSemana(data.payments, weekFilterDashboard).reduce((s, p) => s + p.amount, 0);
+                const gastosMostrados = esAcumulado
+                  ? stats.totalExpense
+                  : filtrarPorSemana(data.expenses, weekFilterDashboard).reduce((s, e) => s + e.amount, 0);
                 const balanceMostrado = ingresosMostrados - gastosMostrados;
                 return (
-                  <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-                    <StatCard label={weekFilterDashboard ? "Ingresos (semana)" : "Ingresos totales"} value={fmt(ingresosMostrados)} tone="green" Icon={TrendingUp} />
-                    <StatCard label={weekFilterDashboard ? "Gastos (semana)" : "Gastos totales"} value={fmt(gastosMostrados)} tone="brick" Icon={TrendingDown} />
-                    <StatCard label={weekFilterDashboard ? "Balance (semana)" : "Balance neto"} value={fmt(balanceMostrado)} tone="neutral" Icon={Wallet} />
-                  </div>
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: esAcumulado ? CHIP_BG : BLUE_LT, borderRadius: 8, fontSize: 13, flexWrap: "wrap" }}>
+                      <span style={{ color: esAcumulado ? INK : BLUE, fontWeight: 600 }}>
+                        {esAcumulado
+                          ? "📊 Mostrando el acumulado histórico"
+                          : weekFilterDashboard === semanaActualDashDefault
+                            ? `📅 Mostrando la semana actual (${formatWeekLabel(weekFilterDashboard)})`
+                            : `📌 Mostrando la semana ${formatWeekLabel(weekFilterDashboard)}`}
+                      </span>
+                      <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+                        {weekFilterDashboard !== semanaActualDashDefault && (
+                          <button onClick={() => setWeekFilterDashboard(semanaActualDashDefault)} style={{ border: "none", background: "none", color: BLUE, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
+                            Ver semana actual
+                          </button>
+                        )}
+                        {!esAcumulado && (
+                          <button onClick={() => setWeekFilterDashboard("acumulado")} style={{ border: "none", background: "none", color: GRAY_TXT, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
+                            Ver acumulado histórico
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+                      <StatCard label="Ingresos" value={fmt(ingresosMostrados)} tone="green" Icon={TrendingUp} />
+                      <StatCard label="Gastos" value={fmt(gastosMostrados)} tone="brick" Icon={TrendingDown} />
+                      <StatCard label="Balance" value={fmt(balanceMostrado)} tone="neutral" Icon={Wallet} />
+                    </div>
+                  </>
                 );
               })()}
 
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
-                <WeeklyReportTable payments={data.payments} expenses={data.expenses} selectedWeek={weekFilterDashboard} onSelectWeek={setWeekFilterDashboard} />
+                <WeeklyReportTable payments={data.payments} expenses={data.expenses} selectedWeek={weekFilterDashboard === "acumulado" ? null : weekFilterDashboard} onSelectWeek={(w) => setWeekFilterDashboard(w || getWeekStart(new Date()))} />
               </div>
 
               <div style={{ background: CARD, borderRadius: 14, padding: 16, marginBottom: 16 }}>
@@ -1730,7 +1747,10 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
   const [truckFilter, setTruckFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [weekFilter, setWeekFilter] = useState(null);
+  // Por default se enfoca en la semana actual. "acumulado" es un estado
+  // aparte (histórico completo), solo cuando ella lo pida con su botón.
+  const semanaActualDefault = getWeekStart(new Date());
+  const [weekFilter, setWeekFilter] = useState(semanaActualDefault);
 
   let filteredExpenses = data.expenses;
 
@@ -1755,9 +1775,9 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
   filteredExpenses = filteredExpenses.sort((a, b) => b.date.localeCompare(a.date));
 
-  // Si hay una semana seleccionada en la tabla de abajo, los recuadros de
-  // arriba se enfocan solo en esa semana; si no, muestran el total historico.
-  const expensesParaTotales = weekFilter ? filtrarPorSemana(data.expenses, weekFilter) : data.expenses;
+  // Los recuadros de arriba se enfocan en la semana elegida (por default, la
+  // actual). Solo muestran el acumulado historico cuando weekFilter === "acumulado".
+  const expensesParaTotales = weekFilter === "acumulado" ? data.expenses : filtrarPorSemana(data.expenses, weekFilter);
 
   const totalGasolina = expensesParaTotales.filter(e => e.category === "gasolina").reduce((s, e) => s + e.amount, 0);
   const totalPiezas = expensesParaTotales.filter(e => e.category === "piezas").reduce((s, e) => s + e.amount, 0);
@@ -1778,14 +1798,27 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
   return (
     <div>
-      {weekFilter && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: BLUE_LT, borderRadius: 8, fontSize: 13 }}>
-          <span style={{ color: BLUE, fontWeight: 600 }}>📌 Mostrando solo la semana {formatWeekLabel(weekFilter)}</span>
-          <button onClick={() => setWeekFilter(null)} style={{ marginLeft: "auto", border: "none", background: "none", color: BLUE, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
-            Ver todo ✕
-          </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: weekFilter === "acumulado" ? CHIP_BG : BLUE_LT, borderRadius: 8, fontSize: 13, flexWrap: "wrap" }}>
+        <span style={{ color: weekFilter === "acumulado" ? INK : BLUE, fontWeight: 600 }}>
+          {weekFilter === "acumulado"
+            ? "📊 Mostrando el acumulado histórico"
+            : weekFilter === semanaActualDefault
+              ? `📅 Mostrando la semana actual (${formatWeekLabel(weekFilter)})`
+              : `📌 Mostrando la semana ${formatWeekLabel(weekFilter)}`}
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+          {weekFilter !== semanaActualDefault && (
+            <button onClick={() => setWeekFilter(semanaActualDefault)} style={{ border: "none", background: "none", color: BLUE, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
+              Ver semana actual
+            </button>
+          )}
+          {weekFilter !== "acumulado" && (
+            <button onClick={() => setWeekFilter("acumulado")} style={{ border: "none", background: "none", color: GRAY_TXT, fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
+              Ver acumulado histórico
+            </button>
+          )}
         </div>
-      )}
+      </div>
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <StatCard label="Gasolina" value={fmt(totalGasolina)} tone="orange" Icon={Fuel} />
         <StatCard label="Piezas" value={fmt(totalPiezas)} tone="brick" Icon={Wrench} />
@@ -1796,7 +1829,7 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
-        <WeeklyReportTable payments={data.payments} expenses={data.expenses} selectedWeek={weekFilter} onSelectWeek={setWeekFilter} />
+        <WeeklyReportTable payments={data.payments} expenses={data.expenses} selectedWeek={weekFilter === "acumulado" ? null : weekFilter} onSelectWeek={(w) => setWeekFilter(w || semanaActualDefault)} />
       </div>
 
       <div style={{ marginBottom: 20 }}>
