@@ -274,6 +274,21 @@ function formatWeekLabel(dateStr) {
   return `${pad(dIni)}/${pad(mIni)}-${pad(dFin)}/${pad(mFin)}`;
 }
 
+// Suma de gastos por categoria dentro de una semana (lunes a domingo), usando
+// la fecha real en que se registro el gasto -- mismo criterio que ya usa
+// getWeeklyReport, para que ambos reportes coincidan entre si.
+function gastosPorCategoriaEnSemana(expenses, weekStart, categorias) {
+  const weekEndDate = new Date(weekStart + "T00:00:00");
+  weekEndDate.setDate(weekEndDate.getDate() + 6);
+  const weekEnd = toLocalISODate(weekEndDate);
+  const enSemana = expenses.filter(e => e.date >= weekStart && e.date <= weekEnd);
+  const resultado = {};
+  categorias.forEach(cat => {
+    resultado[cat] = enSemana.filter(e => e.category === cat).reduce((s, e) => s + e.amount, 0);
+  });
+  return resultado;
+}
+
 // Tabla comparativa semana por semana: ingresos (pagos) y gastos, usando la
 // FECHA REAL en que se registro cada movimiento (no el periodo que ese pago
 // cubre) -- para reflejar el flujo de caja real semana a semana. Regresa
@@ -509,6 +524,68 @@ function RouteStrip({ shift }) {
 // Una fila por semana (la mas reciente arriba) comparando ingresos, gastos
 // y balance -- para ver de un vistazo como va cada semana en vez de solo
 // el acumulado historico.
+// Desglose de Gasolina y Salario: semana actual vs. semana anterior. Usa el
+// mismo criterio de fecha real que WeeklyReportTable, para que los numeros
+// entre ambos reportes siempre coincidan.
+function DetalleGastosSemana({ expenses }) {
+  const semanaActual = getWeekStart(new Date());
+  const semanaPasadaDate = new Date(semanaActual + "T00:00:00");
+  semanaPasadaDate.setDate(semanaPasadaDate.getDate() - 7);
+  const semanaPasada = toLocalISODate(semanaPasadaDate);
+
+  const actual = gastosPorCategoriaEnSemana(expenses, semanaActual, ["gasolina", "salario"]);
+  const pasada = gastosPorCategoriaEnSemana(expenses, semanaPasada, ["gasolina", "salario"]);
+
+  const filas = [
+    { id: "gasolina", label: "⛽ Gasolina" },
+    { id: "salario", label: "💰 Salario" },
+  ];
+
+  return (
+    <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "1.3fr 1fr 1fr",
+        background: CHIP_BG,
+        padding: "10px 16px",
+        fontSize: 12,
+        fontWeight: 700,
+        color: GRAY_TXT,
+      }}>
+        <div>Categoría</div>
+        <div style={{ textAlign: "right" }}>Esta semana ({formatWeekLabel(semanaActual)})</div>
+        <div style={{ textAlign: "right" }}>Semana pasada ({formatWeekLabel(semanaPasada)})</div>
+      </div>
+      {filas.map((f, i) => {
+        const valActual = actual[f.id] || 0;
+        const valPasada = pasada[f.id] || 0;
+        const diferencia = valActual - valPasada;
+        return (
+          <div key={f.id} style={{
+            display: "grid",
+            gridTemplateColumns: "1.3fr 1fr 1fr",
+            padding: "10px 16px",
+            borderTop: i === 0 ? "none" : `1px solid ${BORDER}`,
+            fontSize: 13,
+            alignItems: "center",
+          }}>
+            <div style={{ fontWeight: 600, color: INK }}>{f.label}</div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontWeight: 700, color: INK }}>{fmt(valActual)}</div>
+              {valPasada > 0 && diferencia !== 0 && (
+                <div style={{ fontSize: 11, color: diferencia > 0 ? BRICK : GREEN }}>
+                  {diferencia > 0 ? "▲" : "▼"} {fmt(Math.abs(diferencia))} vs. semana pasada
+                </div>
+              )}
+            </div>
+            <div style={{ textAlign: "right", color: GRAY_TXT, fontWeight: 600 }}>{fmt(valPasada)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function WeeklyReportTable({ payments, expenses }) {
   const rows = useMemo(() => getWeeklyReport(payments, expenses).slice().reverse(), [payments, expenses]);
 
@@ -1051,6 +1128,11 @@ export default function App() {
             tone={(semanaPasadaRow?.balance ?? 0) >= 0 ? "blue" : "brick"}
             Icon={Wallet}
           />
+        </div>
+
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, color: INK, marginBottom: 10 }}>Gasolina y Salario — esta semana vs. la pasada</div>
+          <DetalleGastosSemana expenses={data.expenses} />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 24 }}>
@@ -1660,6 +1742,11 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Reporte semanal (ingresos vs. gastos)</div>
         <WeeklyReportTable payments={data.payments} expenses={data.expenses} />
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: INK, marginBottom: 10 }}>Gasolina y Salario — esta semana vs. la pasada</div>
+        <DetalleGastosSemana expenses={data.expenses} />
       </div>
 
       <div style={{ marginBottom: 12 }}>
