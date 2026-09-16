@@ -497,17 +497,81 @@ async function persist(data) {
 
 // ============ FIN FUNCIONES DE CARGA ============
 
-function StatCard({ label, value, tone, Icon }) {
+function StatCard({ label, value, tone, Icon, onClick }) {
   const bg = tone === "green" ? GREEN_LT : tone === "brick" ? BRICK_LT : tone === "blue" ? BLUE_LT : tone === "orange" ? ORANGE_LT : CHIP_BG;
   const fg = tone === "green" ? GREEN : tone === "brick" ? BRICK : tone === "blue" ? BLUE : tone === "orange" ? ORANGE : INK;
+  const clickable = typeof onClick === "function";
   return (
-    <div style={{ background: bg, borderRadius: 14, padding: "16px 18px", flex: 1, minWidth: 150 }}>
+    <div
+      onClick={onClick}
+      style={{
+        background: bg,
+        borderRadius: 14,
+        padding: "16px 18px",
+        flex: 1,
+        minWidth: 150,
+        cursor: clickable ? "pointer" : "default",
+        transition: "box-shadow 0.15s",
+      }}
+      onMouseEnter={(e) => { if (clickable) e.currentTarget.style.boxShadow = "0 4px 14px rgba(30,42,68,0.12)"; }}
+      onMouseLeave={(e) => { if (clickable) e.currentTarget.style.boxShadow = "none"; }}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <Icon size={16} color={fg} />
         <span style={{ fontSize: 13, color: GRAY_TXT, fontWeight: 500 }}>{label}</span>
       </div>
       <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: fg }}>{value}</div>
+      {clickable && (
+        <div style={{ fontSize: 10, color: GRAY_TXT, marginTop: 4 }}>Ver detalle →</div>
+      )}
     </div>
+  );
+}
+
+// ============ MODAL: DETALLE DE UN TOTAL DE GASTOS (al dar click en un recuadro) ============
+// Lista los gastos individuales que componen el total de un recuadro (por
+// categoria o el total general), respetando el filtro de semana/acumulado
+// activo en ese momento en GastosScreen.
+function DetalleTotalGastosModal({ titulo, gastos, getTruckName, getCategoryLabel, onClose }) {
+  const total = gastos.reduce((s, e) => s + e.amount, 0);
+  const ordenados = [...gastos].sort((a, b) => b.date.localeCompare(a.date));
+  return (
+    <Modal title={titulo} onClose={onClose}>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: INK, marginBottom: 14 }}>
+        {fmt(total)}
+      </div>
+      {ordenados.length === 0 ? (
+        <div style={{ padding: "16px 0", textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>
+          No hay gastos en este total.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {ordenados.map((e, i) => (
+            <div
+              key={e.id}
+              style={{
+                padding: "10px 0",
+                borderTop: i === 0 ? "none" : `1px solid ${BORDER}`,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+                  {getCategoryLabel(e.category)} · {getTruckName(e.truckId)}
+                </div>
+                <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: 2 }}>
+                  {e.date}{e.desc ? ` · ${e.desc}` : ""}
+                </div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: BRICK, whiteSpace: "nowrap" }}>{fmt(e.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -1751,6 +1815,9 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
   // aparte (histórico completo), solo cuando ella lo pida con su botón.
   const semanaActualDefault = getWeekStart(new Date());
   const [weekFilter, setWeekFilter] = useState(semanaActualDefault);
+  // Categoria (o "total") cuyo detalle se esta mostrando en el modal emergente,
+  // al dar click en uno de los recuadros de arriba. null = modal cerrado.
+  const [detalleAbierto, setDetalleAbierto] = useState(null);
 
   let filteredExpenses = data.expenses;
 
@@ -1796,8 +1863,33 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
     return cat ? cat.label : id;
   };
 
+  // Definicion de cada recuadro clickeable: su categoria (o null = total),
+  // y el titulo que se muestra arriba del modal emergente cuando se abre.
+  const recuadros = {
+    gasolina: { categoria: "gasolina", titulo: "Gasolina" },
+    piezas: { categoria: "piezas", titulo: "Piezas" },
+    seguro: { categoria: "seguro", titulo: "Seguro" },
+    salario: { categoria: "salario", titulo: "Salario" },
+    total: { categoria: null, titulo: "Total Gastos" },
+  };
+  const contextoSemana = weekFilter === "acumulado" ? "Acumulado histórico" : formatWeekLabel(weekFilter);
+  const gastosDelDetalle = detalleAbierto
+    ? (recuadros[detalleAbierto].categoria
+        ? expensesParaTotales.filter(e => e.category === recuadros[detalleAbierto].categoria)
+        : expensesParaTotales)
+    : [];
+
   return (
     <div>
+      {detalleAbierto && (
+        <DetalleTotalGastosModal
+          titulo={`${recuadros[detalleAbierto].titulo} — ${contextoSemana}`}
+          gastos={gastosDelDetalle}
+          getTruckName={getTruckName}
+          getCategoryLabel={getCategoryLabel}
+          onClose={() => setDetalleAbierto(null)}
+        />
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: weekFilter === "acumulado" ? CHIP_BG : BLUE_LT, borderRadius: 8, fontSize: 13, flexWrap: "wrap" }}>
         <span style={{ color: weekFilter === "acumulado" ? INK : BLUE, fontWeight: 600 }}>
           {weekFilter === "acumulado"
@@ -1820,11 +1912,11 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        <StatCard label="Gasolina" value={fmt(totalGasolina)} tone="orange" Icon={Fuel} />
-        <StatCard label="Piezas" value={fmt(totalPiezas)} tone="brick" Icon={Wrench} />
-        <StatCard label="Seguro" value={fmt(totalSeguro)} tone="blue" Icon={Shield} />
-        <StatCard label="Salario" value={fmt(totalSalario)} tone="neutral" Icon={Banknote} />
-        <StatCard label="Total Gastos" value={fmt(totalGeneral)} tone="brick" Icon={Wallet} />
+        <StatCard label="Gasolina" value={fmt(totalGasolina)} tone="orange" Icon={Fuel} onClick={() => setDetalleAbierto("gasolina")} />
+        <StatCard label="Piezas" value={fmt(totalPiezas)} tone="brick" Icon={Wrench} onClick={() => setDetalleAbierto("piezas")} />
+        <StatCard label="Seguro" value={fmt(totalSeguro)} tone="blue" Icon={Shield} onClick={() => setDetalleAbierto("seguro")} />
+        <StatCard label="Salario" value={fmt(totalSalario)} tone="neutral" Icon={Banknote} onClick={() => setDetalleAbierto("salario")} />
+        <StatCard label="Total Gastos" value={fmt(totalGeneral)} tone="brick" Icon={Wallet} onClick={() => setDetalleAbierto("total")} />
       </div>
 
       <div style={{ marginBottom: 20 }}>
