@@ -2006,7 +2006,6 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
 
   const totalGasolina = expensesParaTotales.filter(e => e.category === "gasolina").reduce((s, e) => s + e.amount, 0);
   const totalPiezas = expensesParaTotales.filter(e => e.category === "piezas").reduce((s, e) => s + e.amount, 0);
-  const totalSeguro = expensesParaTotales.filter(e => e.category === "seguro").reduce((s, e) => s + e.amount, 0);
   const totalSalario = expensesParaTotales.filter(e => e.category === "salario").reduce((s, e) => s + e.amount, 0);
   const totalOtro = expensesParaTotales.filter(e => e.category === "otro").reduce((s, e) => s + e.amount, 0);
   const totalGeneral = expensesParaTotales.reduce((s, e) => s + e.amount, 0);
@@ -2026,8 +2025,8 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
   const recuadros = {
     gasolina: { categoria: "gasolina", titulo: "Gasolina" },
     piezas: { categoria: "piezas", titulo: "Piezas" },
-    seguro: { categoria: "seguro", titulo: "Seguro" },
     salario: { categoria: "salario", titulo: "Salario" },
+    otro: { categoria: "otro", titulo: "Otro" },
     total: { categoria: null, titulo: "Total Gastos" },
   };
   const contextoSemana = weekFilter === "acumulado" ? "Acumulado histórico" : formatWeekLabel(weekFilter);
@@ -2072,8 +2071,8 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
       <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <StatCard label="Gasolina" value={fmt(totalGasolina)} tone="orange" Icon={Fuel} onClick={() => setDetalleAbierto("gasolina")} />
         <StatCard label="Piezas" value={fmt(totalPiezas)} tone="brick" Icon={Wrench} onClick={() => setDetalleAbierto("piezas")} />
-        <StatCard label="Seguro" value={fmt(totalSeguro)} tone="blue" Icon={Shield} onClick={() => setDetalleAbierto("seguro")} />
         <StatCard label="Salario" value={fmt(totalSalario)} tone="neutral" Icon={Banknote} onClick={() => setDetalleAbierto("salario")} />
+        <StatCard label="Otro" value={fmt(totalOtro)} tone="neutral" Icon={Wallet} onClick={() => setDetalleAbierto("otro")} />
         <StatCard label="Total Gastos" value={fmt(totalGeneral)} tone="brick" Icon={Wallet} onClick={() => setDetalleAbierto("total")} />
       </div>
 
