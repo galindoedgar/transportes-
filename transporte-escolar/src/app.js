@@ -665,6 +665,17 @@ function WeeklyReportTable({ payments, expenses, selectedWeek, onSelectWeek }) {
   const rows = useMemo(() => getWeeklyReport(payments, expenses).slice().reverse(), [payments, expenses]);
   const clickable = typeof onSelectWeek === "function";
 
+  // Por default solo se muestran las ultimas semanas (para no saturar la
+  // pantalla, sobre todo en celular); "Ver todas" despliega el historico
+  // completo. Si la semana enfocada (selectedWeek) queda fuera de las
+  // ultimas N, se muestra igual aunque no se haya dado clic en "Ver todas",
+  // para no esconder la semana que la persona esta viendo.
+  const LIMIT = 6;
+  const [expandido, setExpandido] = useState(false);
+  const dentroDelLimite = rows.slice(0, LIMIT).some(r => r.weekStart === selectedWeek);
+  const mostrarTodas = expandido || (selectedWeek && !dentroDelLimite);
+  const rowsVisibles = mostrarTodas ? rows : rows.slice(0, LIMIT);
+
   return (
     <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
       <div style={{
@@ -686,7 +697,7 @@ function WeeklyReportTable({ payments, expenses, selectedWeek, onSelectWeek }) {
           Todavía no hay pagos ni gastos registrados.
         </div>
       )}
-      {rows.map((r, i) => {
+      {rowsVisibles.map((r, i) => {
         const isSelected = selectedWeek === r.weekStart;
         return (
           <div
@@ -711,6 +722,25 @@ function WeeklyReportTable({ payments, expenses, selectedWeek, onSelectWeek }) {
           </div>
         );
       })}
+      {rows.length > LIMIT && (
+        <button
+          onClick={() => setExpandido(!mostrarTodas)}
+          style={{
+            width: "100%",
+            border: "none",
+            borderTop: `1px solid ${BORDER}`,
+            background: "transparent",
+            color: BLUE,
+            fontWeight: 600,
+            fontSize: 12,
+            padding: "10px 16px",
+            cursor: "pointer",
+            fontFamily: "'Inter', sans-serif",
+          }}
+        >
+          {mostrarTodas ? "Ver menos" : `Ver todas las semanas (${rows.length})`}
+        </button>
+      )}
     </div>
   );
 }
@@ -1977,7 +2007,13 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
   // al dar click en uno de los recuadros de arriba. null = modal cerrado.
   const [detalleAbierto, setDetalleAbierto] = useState(null);
 
-  let filteredExpenses = data.expenses;
+  // Los recuadros de arriba (y ahora tambien la lista de gastos de abajo) se
+  // enfocan en la semana elegida -- por default la actual. Solo se ve el
+  // historico completo cuando weekFilter === "acumulado". Esto evita que la
+  // lista se vea saturada mostrando anos de gastos por default.
+  const expensesParaTotales = weekFilter === "acumulado" ? data.expenses : filtrarPorSemana(data.expenses, weekFilter);
+
+  let filteredExpenses = expensesParaTotales;
 
   if (truckFilter !== "all") {
     filteredExpenses = filteredExpenses.filter(e => e.truckId === truckFilter);
@@ -1999,10 +2035,6 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
   }
 
   filteredExpenses = filteredExpenses.sort((a, b) => b.date.localeCompare(a.date));
-
-  // Los recuadros de arriba se enfocan en la semana elegida (por default, la
-  // actual). Solo muestran el acumulado historico cuando weekFilter === "acumulado".
-  const expensesParaTotales = weekFilter === "acumulado" ? data.expenses : filtrarPorSemana(data.expenses, weekFilter);
 
   const totalGasolina = expensesParaTotales.filter(e => e.category === "gasolina").reduce((s, e) => s + e.amount, 0);
   const totalPiezas = expensesParaTotales.filter(e => e.category === "piezas").reduce((s, e) => s + e.amount, 0);
@@ -2117,7 +2149,11 @@ function GastosScreen({ data, onAddExpense, onDeleteExpense }) {
       <div style={{ background: CARD, borderRadius: 14, overflow: "hidden" }}>
         {filteredExpenses.length === 0 && (
           <div style={{ padding: 20, textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>
-            {searchTerm ? "No hay gastos que coincidan con tu búsqueda." : "No hay gastos registrados."}
+            {searchTerm
+              ? "No hay gastos que coincidan con tu búsqueda."
+              : weekFilter === "acumulado"
+                ? "No hay gastos registrados."
+                : "No hay gastos en la semana enfocada. Da clic en \"Ver acumulado histórico\" arriba para ver todo."}
           </div>
         )}
         {filteredExpenses.map((e, i) => {
