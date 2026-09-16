@@ -909,6 +909,9 @@ export default function App() {
   const [view, setView] = useState("general");
   const [weekFilterDashboard, setWeekFilterDashboard] = useState(getWeekStart(new Date()));
   const [modal, setModal] = useState(null);
+  // Detalle emergente (modal) al dar click en un recuadro de Ingresos/Gastos/
+  // Balance en Inicio o Dashboard. Forma: { tipo: "gastos"|"ingresos"|"balance", titulo, pagos, gastos }
+  const [detalleApp, setDetalleApp] = useState(null);
   const [syncStatus, setSyncStatus] = useState({ synced: true, message: "Sincronizado" });
   
   const [showAdminLogin, setShowAdminLogin] = useState(false);
@@ -989,6 +992,20 @@ export default function App() {
   function getPaymentCount(accountId) {
     const weeks = getWeeks();
     return data.payments.filter(p => p.accountId === accountId && weeks.includes(p.period)).length;
+  }
+
+  // Helpers para los modales de detalle (Ingresos/Gastos/Balance) en Inicio y Dashboard.
+  function getAccountName(accountId) {
+    const acc = data.accounts.find(a => a.id === accountId);
+    return acc ? acc.familyName : "Cliente eliminado";
+  }
+  function getTruckNameApp(id) {
+    const t = data.trucks.find(t => t.id === id);
+    return t ? t.name : "General";
+  }
+  function getCategoryLabelApp(id) {
+    const cat = CATS.find(c => c.id === id);
+    return cat ? cat.label : id;
   }
 
   function handleAdminLogin() {
@@ -1196,6 +1213,18 @@ export default function App() {
           <SyncLogModal log={syncLog} onClose={() => setShowSyncLog(false)} />
         )}
 
+        {detalleApp && detalleApp.tipo === "balance" && (
+          <DetalleBalanceModal
+            titulo={detalleApp.titulo}
+            pagos={detalleApp.pagos}
+            gastos={detalleApp.gastos}
+            getAccountName={getAccountName}
+            getTruckName={getTruckNameApp}
+            getCategoryLabel={getCategoryLabelApp}
+            onClose={() => setDetalleApp(null)}
+          />
+        )}
+
         <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
           <StatCard label="Ingresos" value={fmt(stats.totalIncome)} tone="green" Icon={TrendingUp} />
           <StatCard label="Gastos" value={fmt(stats.totalExpense)} tone="brick" Icon={TrendingDown} />
@@ -1208,12 +1237,24 @@ export default function App() {
             value={fmt(semanaActualRow ? semanaActualRow.balance : 0)}
             tone={(semanaActualRow?.balance ?? 0) >= 0 ? "blue" : "brick"}
             Icon={Wallet}
+            onClick={semanaActualRow ? () => setDetalleApp({
+              tipo: "balance",
+              titulo: `Balance esta semana (${semanaActualRow.label})`,
+              pagos: filtrarPorSemana(data.payments, semanaActualRow.weekStart),
+              gastos: filtrarPorSemana(data.expenses, semanaActualRow.weekStart),
+            }) : undefined}
           />
           <StatCard
             label={semanaPasadaRow ? `Balance semana pasada (${semanaPasadaRow.label})` : "Balance semana pasada"}
             value={fmt(semanaPasadaRow ? semanaPasadaRow.balance : 0)}
             tone={(semanaPasadaRow?.balance ?? 0) >= 0 ? "blue" : "brick"}
             Icon={Wallet}
+            onClick={semanaPasadaRow ? () => setDetalleApp({
+              tipo: "balance",
+              titulo: `Balance semana pasada (${semanaPasadaRow.label})`,
+              pagos: filtrarPorSemana(data.payments, semanaPasadaRow.weekStart),
+              gastos: filtrarPorSemana(data.expenses, semanaPasadaRow.weekStart),
+            }) : undefined}
           />
         </div>
 
@@ -1662,13 +1703,12 @@ export default function App() {
               {(() => {
                 const semanaActualDashDefault = getWeekStart(new Date());
                 const esAcumulado = weekFilterDashboard === "acumulado";
-                const ingresosMostrados = esAcumulado
-                  ? stats.totalIncome
-                  : filtrarPorSemana(data.payments, weekFilterDashboard).reduce((s, p) => s + p.amount, 0);
-                const gastosMostrados = esAcumulado
-                  ? stats.totalExpense
-                  : filtrarPorSemana(data.expenses, weekFilterDashboard).reduce((s, e) => s + e.amount, 0);
+                const pagosMostrados = esAcumulado ? data.payments : filtrarPorSemana(data.payments, weekFilterDashboard);
+                const gastosMostradosList = esAcumulado ? data.expenses : filtrarPorSemana(data.expenses, weekFilterDashboard);
+                const ingresosMostrados = pagosMostrados.reduce((s, p) => s + p.amount, 0);
+                const gastosMostrados = gastosMostradosList.reduce((s, e) => s + e.amount, 0);
                 const balanceMostrado = ingresosMostrados - gastosMostrados;
+                const contextoDash = esAcumulado ? "Acumulado histórico" : formatWeekLabel(weekFilterDashboard);
                 return (
                   <>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px", background: esAcumulado ? CHIP_BG : BLUE_LT, borderRadius: 8, fontSize: 13, flexWrap: "wrap" }}>
@@ -1693,9 +1733,18 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-                      <StatCard label="Ingresos" value={fmt(ingresosMostrados)} tone="green" Icon={TrendingUp} />
-                      <StatCard label="Gastos" value={fmt(gastosMostrados)} tone="brick" Icon={TrendingDown} />
-                      <StatCard label="Balance" value={fmt(balanceMostrado)} tone="neutral" Icon={Wallet} />
+                      <StatCard
+                        label="Ingresos" value={fmt(ingresosMostrados)} tone="green" Icon={TrendingUp}
+                        onClick={() => setDetalleApp({ tipo: "ingresos", titulo: `Ingresos — ${contextoDash}`, pagos: pagosMostrados })}
+                      />
+                      <StatCard
+                        label="Gastos" value={fmt(gastosMostrados)} tone="brick" Icon={TrendingDown}
+                        onClick={() => setDetalleApp({ tipo: "gastos", titulo: `Gastos — ${contextoDash}`, gastos: gastosMostradosList })}
+                      />
+                      <StatCard
+                        label="Balance" value={fmt(balanceMostrado)} tone="neutral" Icon={Wallet}
+                        onClick={() => setDetalleApp({ tipo: "balance", titulo: `Balance — ${contextoDash}`, pagos: pagosMostrados, gastos: gastosMostradosList })}
+                      />
                     </div>
                   </>
                 );
@@ -1801,7 +1850,116 @@ export default function App() {
           />
         </Modal>
       )}
+
+      {detalleApp && detalleApp.tipo === "ingresos" && (
+        <DetalleIngresosModal
+          titulo={detalleApp.titulo}
+          pagos={detalleApp.pagos}
+          getAccountName={getAccountName}
+          onClose={() => setDetalleApp(null)}
+        />
+      )}
+      {detalleApp && detalleApp.tipo === "gastos" && (
+        <DetalleTotalGastosModal
+          titulo={detalleApp.titulo}
+          gastos={detalleApp.gastos}
+          getTruckName={getTruckNameApp}
+          getCategoryLabel={getCategoryLabelApp}
+          onClose={() => setDetalleApp(null)}
+        />
+      )}
+      {detalleApp && detalleApp.tipo === "balance" && (
+        <DetalleBalanceModal
+          titulo={detalleApp.titulo}
+          pagos={detalleApp.pagos}
+          gastos={detalleApp.gastos}
+          getAccountName={getAccountName}
+          getTruckName={getTruckNameApp}
+          getCategoryLabel={getCategoryLabelApp}
+          onClose={() => setDetalleApp(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// ============ MODAL: DETALLE DE INGRESOS (pagos) ============
+function DetalleIngresosModal({ titulo, pagos, getAccountName, onClose }) {
+  const total = pagos.reduce((s, p) => s + p.amount, 0);
+  const ordenados = [...pagos].sort((a, b) => b.date.localeCompare(a.date));
+  return (
+    <Modal title={titulo} onClose={onClose}>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: GREEN, marginBottom: 14 }}>
+        {fmt(total)}
+      </div>
+      {ordenados.length === 0 ? (
+        <div style={{ padding: "16px 0", textAlign: "center", color: GRAY_TXT, fontSize: 13 }}>
+          No hay pagos en este total.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {ordenados.map((p, i) => (
+            <div key={p.id} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${BORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{getAccountName(p.accountId)}</div>
+                <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: 2 }}>{p.date}</div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: GREEN, whiteSpace: "nowrap" }}>{fmt(p.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ============ MODAL: DETALLE DE BALANCE (ingresos + gastos juntos) ============
+function DetalleBalanceModal({ titulo, pagos, gastos, getAccountName, getTruckName, getCategoryLabel, onClose }) {
+  const totalIngresos = pagos.reduce((s, p) => s + p.amount, 0);
+  const totalGastos = gastos.reduce((s, e) => s + e.amount, 0);
+  const balance = totalIngresos - totalGastos;
+  const pagosOrdenados = [...pagos].sort((a, b) => b.date.localeCompare(a.date));
+  const gastosOrdenados = [...gastos].sort((a, b) => b.date.localeCompare(a.date));
+  return (
+    <Modal title={titulo} onClose={onClose}>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: balance >= 0 ? BLUE : BRICK, marginBottom: 16 }}>
+        {fmt(balance)}
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: GREEN, marginBottom: 6 }}>Ingresos ({fmt(totalIngresos)})</div>
+      {pagosOrdenados.length === 0 ? (
+        <div style={{ padding: "6px 0 14px", color: GRAY_TXT, fontSize: 12 }}>Sin pagos en este periodo.</div>
+      ) : (
+        <div style={{ marginBottom: 16 }}>
+          {pagosOrdenados.map((p, i) => (
+            <div key={p.id} style={{ padding: "8px 0", borderTop: i === 0 ? "none" : `1px solid ${BORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{getAccountName(p.accountId)}</div>
+                <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: 2 }}>{p.date}</div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: GREEN, whiteSpace: "nowrap" }}>{fmt(p.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: BRICK, marginBottom: 6 }}>Gastos ({fmt(totalGastos)})</div>
+      {gastosOrdenados.length === 0 ? (
+        <div style={{ padding: "6px 0", color: GRAY_TXT, fontSize: 12 }}>Sin gastos en este periodo.</div>
+      ) : (
+        <div>
+          {gastosOrdenados.map((e, i) => (
+            <div key={e.id} style={{ padding: "8px 0", borderTop: i === 0 ? "none" : `1px solid ${BORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{getCategoryLabel(e.category)} · {getTruckName(e.truckId)}</div>
+                <div style={{ fontSize: 11, color: GRAY_TXT, marginTop: 2 }}>{e.date}{e.desc ? ` · ${e.desc}` : ""}</div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: BRICK, whiteSpace: "nowrap" }}>{fmt(e.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
