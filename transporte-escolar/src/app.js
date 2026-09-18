@@ -451,9 +451,14 @@ async function loadData() {
   }
 
   // 3. Si no hay datos en ningún lado, empezar vacío
+  // IMPORTANTE: ya NO se llama a guardarDatos(empty) aquí. Antes, si por cualquier
+  // motivo la lectura a Supabase fallaba o llegaba vacía (ej. red lenta, navegador
+  // sin cache local), esto subía un estado vacío que borraba TODO lo que hubiera
+  // en la nube (guardarDatos borra cualquier fila que no venga en el set local).
+  // Ahora simplemente se queda vacío en local; la nube solo se sobreescribe cuando
+  // el usuario guarda datos reales desde la pantalla.
   const empty = emptyData();
   await window.storage.set("transescolar-data-v3", JSON.stringify(empty), false);
-  await guardarDatos(empty);
   return empty;
 }
 
