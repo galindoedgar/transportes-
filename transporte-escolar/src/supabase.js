@@ -17,10 +17,15 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 // pero nunca se le decia a Supabase "borra lo que ya no esta" -> por eso lo eliminado
 // (o editado, si el id no tenia PK/unique) regresaba al refrescar.
 async function borrarNoPresentes(tabla, idsActuales) {
-  // Si la tabla quedo completamente vacia localmente, borramos todo lo que haya en Supabase.
+  // Antes: si la tabla quedaba vacia localmente, se borraba TODO lo que hubiera en
+  // Supabase. Eso causo perdida real de datos cuando por una lectura fallida o un
+  // dispositivo sin cache local, la app credo (incorrectamente) que no habia nada.
+  // Ahora, por seguridad, si idsActuales viene vacio NO se borra nada automaticamente
+  // -- se deja tal cual esta en Supabase. Si de verdad se quiere vaciar una tabla por
+  // completo, hay que hacerlo a mano desde el Table Editor de Supabase.
   if (idsActuales.length === 0) {
-    const { error } = await supabase.from(tabla).delete().not('id', 'is', null);
-    return error;
+    console.warn(`borrarNoPresentes: se intento vaciar la tabla "${tabla}" por completo (0 ids locales). Por seguridad, no se borro nada.`);
+    return null;
   }
   const { error } = await supabase.from(tabla).delete().not('id', 'in', `(${idsActuales.map(id => `"${id}"`).join(',')})`);
   return error;
