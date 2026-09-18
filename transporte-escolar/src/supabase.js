@@ -73,6 +73,8 @@ export async function guardarDatos(data) {
         rate: account.rate,
         tipo_servicio: account.tipoServicio,
         family_id: account.familyId || null,
+        telefono: account.telefono || null,
+        direccion: account.direccion || null,
       }));
       if (payload.length > 0) {
         const { error } = await supabase.from('accounts').upsert(payload, { onConflict: 'id' });
@@ -203,6 +205,8 @@ export async function cargarDatos() {
         rate: a.rate,
         tipoServicio: a.tipo_servicio,
         familyId: a.family_id || null,
+        telefono: a.telefono || "",
+        direccion: a.direccion || "",
       })),
       payments: payments.map(p => ({
         id: p.id,
