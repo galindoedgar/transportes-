@@ -18,6 +18,6 @@ jobs:
       - name: Ping a Supabase
         run: |
           curl -s -o /dev/null -w "Status: %{http_code}\n" \
-            "https://lxdrvyudpayligrkioke.supabase.co/rest/v1/" \
-            -H "apikey: sb_publishable_53XxbYQFzoLL2mnM9SLqbg_cn874C1l" \
-            -H "Authorization: Bearer sb_publishable_53XxbYQFzoLL2mnM9SLqbg_cn874C1l"
+            "https://fzklupklcnrbrphitkdn.supabase.co/rest/v1/" \
+            -H "apikey: sb_publishable_9qQBscDM_szf0Z1VOByRDA_1HUOE_Cu" \
+            -H "Authorization: Bearer sb_publishable_9qQBscDM_szf0Z1VOByRDA_1HUOE_Cu"
