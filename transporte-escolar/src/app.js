@@ -53,6 +53,8 @@ const CATS = [
 
 const TIPOS_SERVICIO = [
   { id: "kinder", label: "Kinder", icon: School },
+  { id: "kinder_dia", label: "Kinder Turno Día", icon: Sun },
+  { id: "kinder_tarde", label: "Kinder Turno Tarde", icon: Moon },
   { id: "escuela_dia", label: "Escuela Turno Día", icon: Sun },
   { id: "escuela_tarde", label: "Escuela Turno Tarde", icon: Moon },
   { id: "secundaria_dia", label: "Secundaria Turno Día", icon: Sun },
@@ -451,12 +453,10 @@ async function loadData() {
   }
 
   // 3. Si no hay datos en ningún lado, empezar vacío
-  // IMPORTANTE: ya NO se llama a guardarDatos(empty) aquí. Antes, si por cualquier
-  // motivo la lectura a Supabase fallaba o llegaba vacía (ej. red lenta, navegador
-  // sin cache local), esto subía un estado vacío que borraba TODO lo que hubiera
-  // en la nube (guardarDatos borra cualquier fila que no venga en el set local).
-  // Ahora simplemente se queda vacío en local; la nube solo se sobreescribe cuando
-  // el usuario guarda datos reales desde la pantalla.
+  // FIX: ya NO se sube este estado vacío a Supabase. Llegar aquí puede
+  // significar que de verdad no hay datos, pero tambien puede significar
+  // que la lectura a Supabase fallo momentaneamente (red, sesion nueva, etc.);
+  // subir "empty" en ese caso borraria datos reales en la nube.
   const empty = emptyData();
   await window.storage.set("transescolar-data-v3", JSON.stringify(empty), false);
   return empty;
@@ -1208,7 +1208,7 @@ export default function App() {
             <Bus size={20} color={YELLOW} />
           </div>
           <div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Escolar</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, color: INK, lineHeight: 1.2 }}>Transporte Galindo</div>
             <div style={{ fontSize: 13, color: GRAY_TXT }}>{data.trucks.length} camiones · {alumnosActivos} alumnos activos</div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -1460,7 +1460,12 @@ export default function App() {
                         try {
                           const data = JSON.parse(event.target.result);
                           localStorage.setItem("transescolar-data-v3", JSON.stringify(data));
-                          await guardarDatos(data);
+                          const resultado = await guardarDatos(data);
+                          if (resultado && resultado.success === false) {
+                            const detalle = formatearErroresGuardado(resultado.errores);
+                            alert(`❌ El respaldo se guardó localmente pero falló al subir a Supabase: ${detalle}`);
+                            return;
+                          }
                           alert("✅ Respaldo cargado correctamente. La página se recargará.");
                           window.location.reload();
                         } catch (error) {
@@ -2722,6 +2727,8 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
         {TIPOS_SERVICIO.map(tipo => {
           const count = getAlumnosPorTipo(tipo.id);
           const icon = tipo.id === "kinder" ? "🧸" : 
+                       tipo.id === "kinder_dia" ? "🧸☀️" :
+                       tipo.id === "kinder_tarde" ? "🧸🌙" :
                        tipo.id === "escuela_dia" ? "☀️" :
                        tipo.id === "escuela_tarde" ? "🌙" :
                        tipo.id === "secundaria_dia" ? "📖" : "📚";
@@ -2774,6 +2781,8 @@ function ClientesScreen({ data, onAddAccount, onEditAccount, onMarkPaid, onUndoP
           const isSelected = selectedAccountId === a.id;
           
           const tipoIcon = a.tipoServicio === "kinder" ? "🧸" : 
+                           a.tipoServicio === "kinder_dia" ? "🧸☀️" :
+                           a.tipoServicio === "kinder_tarde" ? "🧸🌙" :
                            a.tipoServicio === "escuela_dia" ? "☀️" :
                            a.tipoServicio === "escuela_tarde" ? "🌙" :
                            a.tipoServicio === "secundaria_dia" ? "📖" : "📚";
